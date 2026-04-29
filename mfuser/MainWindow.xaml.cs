@@ -123,6 +123,78 @@ namespace mfuser
         }
 
         // =================================================================
+        // Toggle flow - double-click a row to flip shield <-> unshield
+        // =================================================================
+        // We only toggle rows whose last operation actually went through ("Sent"),
+        // because if the previous call failed or is still in flight, we don't
+        // really know what state the kernel is in for that path.
+        private void OperationsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            // Make sure the click landed on an actual row, not on the empty area
+            // below the rows or on the GridView header.
+            if (!(e.OriginalSource is DependencyObject src)) return;
+            var row = FindAncestor<ListViewItem>(src);
+            if (row == null) return;
+
+            if (!(row.DataContext is OperationEntry entry)) return;
+
+            // Skip rows the user shouldn't be flipping.
+            if (entry.Status == "Sending...")
+            {
+                AddLog("[UI] Toggle ignored: previous call still in flight.",
+                    Brushes.Khaki, LogLevel.Warning);
+                return;
+            }
+            if (entry.Status == "Failed" || entry.Status == "Error")
+            {
+                var resp = MessageBox.Show(
+                    $"This row's last status is '{entry.Status}'. The kernel state "
+                    + "for this path may be uncertain. Toggle anyway?",
+                    "Confirm toggle", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+                if (resp != MessageBoxResult.Yes) return;
+            }
+
+            // Flip the operation: shield <-> unshield.
+            // Anything that isn't "shield" is treated as unshielded, so a flip
+            // always lands us in a defined state.
+            var newOp = string.Equals(entry.Operation, "shield",
+                StringComparison.OrdinalIgnoreCase) ? "unshield" : "shield";
+
+            // Capture the path for logging in case the entry is mutated below.
+            var path = entry.Path;
+            entry.Operation = newOp;
+            entry.Status = "Sending...";
+
+            try
+            {
+                bool ok = _kernel.SendOperation(path, newOp);
+                entry.Status = ok ? "Sent" : "Failed";
+                AddLog($"[UI] toggle {newOp} {path} -> {entry.Status}",
+                    ok ? Brushes.LightGreen : Brushes.OrangeRed,
+                    ok ? LogLevel.Info : LogLevel.Error);
+            }
+            catch (Exception ex)
+            {
+                entry.Status = "Error";
+                AddLog($"[UI] toggle exception: {ex.Message}",
+                    Brushes.OrangeRed, LogLevel.Error);
+            }
+        }
+
+        // Walk up the visual tree to find a parent of a given type.
+        // Needed because the click's OriginalSource is usually a TextBlock
+        // inside the row, not the ListViewItem itself.
+        private static T FindAncestor<T>(DependencyObject current) where T : DependencyObject
+        {
+            while (current != null)
+            {
+                if (current is T t) return t;
+                current = VisualTreeHelper.GetParent(current);
+            }
+            return null;
+        }
+
+        // =================================================================
         // Browse buttons - one for files, one for folders
         // =================================================================
         private void BrowseFileButton_Click(object sender, RoutedEventArgs e)
@@ -155,7 +227,7 @@ namespace mfuser
         // =================================================================
         // The kernel communication layer raises a LogReceived event for every log line.
         // The UI subscribes once in the constructor. Because the event probably fires on a background thread(kernel reader thread, named-pipe thread, etc.),
-        // the handler wraps the actual UI update in Dispatcher.Invoke(...) — this is essential, otherwise you'll get cross-thread exceptions when modifying Logs.
+        // the handler wraps the actual UI update in Dispatcher.Invoke(...) â€” this is essential, otherwise you'll get cross-thread exceptions when modifying Logs.
         // Each log line is timestamped and color-coded based on keywords (error/fail - red, warn - yellow, shield/unshield - blue).
         // The list is capped at 5000 entries to keep memory bounded, and auto-scroll is honored if the checkbox is on.
         // OnClosed unsubscribes and stops the comm layer cleanly when the window closes.

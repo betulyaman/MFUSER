@@ -100,11 +100,24 @@
                                 Style="{StaticResource MutedButton}"
                                 DockPanel.Dock="Right"
                                 Click="ClearOperationsButton_Click"/>
+                        <!-- Hint so users know rows are interactive -->
+                        <TextBlock Text="(double-click a row to toggle)"
+                                   Foreground="#888888" FontStyle="Italic"
+                                   FontSize="11" VerticalAlignment="Center"
+                                   Margin="10,0,0,6"
+                                   DockPanel.Dock="Left"/>
                     </DockPanel>
 
                     <ListView Grid.Row="1" x:Name="OperationsList"
                               Background="#1E1E1E" Foreground="White"
-                              BorderBrush="#3F3F46" BorderThickness="1">
+                              BorderBrush="#3F3F46" BorderThickness="1"
+                              MouseDoubleClick="OperationsList_MouseDoubleClick">
+                        <!-- Hand cursor on every row for affordance -->
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Cursor" Value="Hand"/>
+                            </Style>
+                        </ListView.ItemContainerStyle>
                         <ListView.View>
                             <GridView>
                                 <GridViewColumn Header="#" Width="40"
