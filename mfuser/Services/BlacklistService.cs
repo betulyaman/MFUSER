@@ -1,34 +1,37 @@
-﻿using Serilog;
+using Serilog;
+using System.IO;
 
-public sealed class BlacklistService
+namespace mfuser.Services;
+
+public static class BlacklistService
 {
-    private static readonly ILogger Logger = Log.ForContext<BlacklistService>();
+    private static readonly ILogger Logger = Log.ForContext(typeof(BlacklistService));
 
     private const string BlacklistFilePath = @"E:\workspace\mfuser\blacklist.txt";
 
-    private readonly SemaphoreSlim _updateLock = new(1, 1);
+    private static readonly SemaphoreSlim UpdateLock = new(1, 1);
 
     // Atomic dirty flag used to coalesce blacklist updates across threads.
     // 0 = clean, 1 = dirty.
-    private int _isBlacklistDirty;
+    private static int _isBlacklistDirty;
 
-    public void MarkBlacklistDirty()
+    public static void MarkBlacklistDirty()
     {
         Interlocked.Exchange(ref _isBlacklistDirty, 1);
     }
 
-    private bool IsBlacklistDirty()
+    private static bool IsBlacklistDirty()
     {
         return Volatile.Read(ref _isBlacklistDirty) == 1;
     }
 
-    private void ClearBlacklistDirtyFlag()
+    private static void ClearBlacklistDirtyFlag()
     {
         Interlocked.Exchange(ref _isBlacklistDirty, 0);
     }
 
     // Updates the encrypted blacklist file if there are pending changes.
-    public async Task<bool> UpdateBlacklistFileAsync(CancellationToken cancellationToken)
+    public static async Task<bool> UpdateBlacklistFileAsync(CancellationToken cancellationToken)
     {
         if (!IsBlacklistDirty())
         {
@@ -36,7 +39,7 @@ public sealed class BlacklistService
             return false;
         }
 
-        await _updateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        await UpdateLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
@@ -47,8 +50,7 @@ public sealed class BlacklistService
 
             ClearBlacklistDirtyFlag();
 
-            bool isWritten = await WriteBlacklistToFileAsync(BlacklistFilePath, cancellationToken)
-                .ConfigureAwait(false);
+            bool isWritten = WriteBlacklistToFile(BlacklistFilePath);
 
             if (!isWritten)
             {
@@ -73,7 +75,7 @@ public sealed class BlacklistService
         }
         finally
         {
-            _updateLock.Release();
+            UpdateLock.Release();
         }
     }
 
@@ -162,42 +164,38 @@ public sealed class BlacklistService
         }
     }
 
-    private async Task<bool> WriteBlacklistToFileAsync(string blacklistFilePath,
-        CancellationToken cancellationToken)
+    private static bool WriteBlacklistToFile(string blacklistFilePath)
     {
         if (string.IsNullOrWhiteSpace(blacklistFilePath))
         {
             throw new ArgumentException("Blacklist file path is null or empty.", nameof(blacklistFilePath));
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-
         HashSet<string> pathSet = new(StringComparer.OrdinalIgnoreCase)
         {
             blacklistFilePath // blacklist.txt must contain its own file path
         };
 
-        await DatabaseReadService.ReadShieldedPathsFromDbAsync(cancellationToken, pathSet)
-            .ConfigureAwait(false);
+        JsonReadService.ReadShieldedPaths(pathSet);
 
         try
         {
             // 1) Build BLACKLIST payload
             var payloadResult = PayloadBuilders.BlacklistPayloadBuilder(pathSet);
 
-            // 3) Build encrypted+signed message
+            // 2) Build encrypted+signed message
             byte[] finalMessageBytes = MessageBuilders.BuildMessage(
                 MessageContract.PayloadType.Blacklist,
                 payloadResult.Payload.Span,
                 payloadResult.ItemCount,
                 MessageBuilders.MessageProtection.EncryptedSigned);
 
-            // 4) Atomically write file (reuse old helper logic pattern)
+            // 3) Atomically write file
             return WriteFileAtomically(blacklistFilePath, finalMessageBytes);
         }
         catch (Exception exceptionObject)
         {
-            Logger.Error(exceptionObject, "MINIFILTER: WriteBlacklistToFileAsync failed.");
+            Logger.Error(exceptionObject, "MINIFILTER: WriteBlacklistToFile failed.");
 
             return false;
         }

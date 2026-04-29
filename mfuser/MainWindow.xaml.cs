@@ -345,6 +345,8 @@ namespace mfuser
             try
             {
                 OperationStore.Save(Operations);
+
+                BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).GetAwaiter().GetResult();
             }
             catch { /* best-effort */ }
 

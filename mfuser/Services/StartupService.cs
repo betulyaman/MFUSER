@@ -35,31 +35,4 @@ public sealed class StartupService : IHostedService
             await Task.WhenAny(_blacklistLoopTask, Task.Delay(TimeSpan.FromSeconds(5), cancellationToken));
         }
     }
-
-    private async Task RunBlacklistLoopAsync(CancellationToken cancellationToken)
-    {
-        using PeriodicTimer timer = new(TimeSpan.FromSeconds(30));
-
-        try
-        {
-            while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
-            {
-                try
-                {
-                    await _blacklistService.UpdateBlacklistFileAsync(cancellationToken).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (Exception exceptionObject)
-                {
-                    _logger.Error(exceptionObject, "MINIFILTER: Error while updating blacklist file.");
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-        }
-    }
 }

@@ -1,24 +1,28 @@
 ﻿using Serilog;
 using System.Text;
 
-public sealed class PolicySyncService : IDriverService
+namespace mfuser.Services;
+
+public enum ShieldOperationType
+{
+    Shield = 1,
+    Unshield = 2,
+}
+
+public sealed class PolicySyncService
 {
     private static readonly ILogger Logger = Log.ForContext<PolicySyncService>();
 
     private const int MaxPolicyEntryPayloadBytes = 32 * 1024;
 
     private readonly ConnectionService _connectionService;
-    private readonly BlacklistService _blacklistService;
 
-    public PolicySyncService(
-        ConnectionService connectionService,
-        BlacklistService blacklistService)
+    public PolicySyncService(ConnectionService connectionService)
     {
         _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
-        _blacklistService = blacklistService ?? throw new ArgumentNullException(nameof(blacklistService));
     }
 
-    public void InformDriver(DriverInformOperation operation, string path)
+    public void InformDriver(string path, ShieldOperationType operation)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -30,13 +34,13 @@ public sealed class PolicySyncService : IDriverService
 
         switch (operation)
         {
-            case DriverInformOperation.Shield:
+            case ShieldOperationType.Shield:
                 policySyncStatus = MessageContract.PolicySyncStatus.Add;
                 allowedAccessPolicy = MessageContract.AccessPolicy.AllButDelete;
 
                 break;
 
-            case DriverInformOperation.Unshield:
+            case ShieldOperationType.Unshield:
                 policySyncStatus = MessageContract.PolicySyncStatus.Remove;
                 allowedAccessPolicy = MessageContract.AccessPolicy.AllAccess;
 
@@ -45,8 +49,6 @@ public sealed class PolicySyncService : IDriverService
             default:
                 throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported driver inform operation.");
         }
-
-        _blacklistService.MarkBlacklistDirty();
 
         PayloadBuilders.PolicySyncPayloadEntry payloadEntry =
             BuildPolicySyncPayloadEntry(policySyncStatus, allowedAccessPolicy, path);
