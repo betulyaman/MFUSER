@@ -1,8 +1,11 @@
 using mfuser.Models;
 using mfuser.Services;
+using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -13,9 +16,9 @@ namespace mfuser
     /// </summary>
     public partial class MainWindow : Window
     {
-        // Bound to the upper-left ListView. ObservableCollection auto-updates the UI.
-        // ObservableCollection automatically notifies the UI when items are added/removed,
-        // so you never have to manually refresh the lists.
+        // Bound to the upper-left ListView. ObservableCollection auto-updates the UI
+        // on Add/Remove; OperationEntry implements INotifyPropertyChanged so
+        // updating Status (etc.) updates the row automatically too.
         public ObservableCollection<OperationEntry> Operations { get; }
             = new ObservableCollection<OperationEntry>();
 
@@ -23,19 +26,36 @@ namespace mfuser
         public ObservableCollection<LogEntry> Logs { get; }
             = new ObservableCollection<LogEntry>();
 
-        // Your communication-layer wrapper. Replace IKernelComm with your real type.
+        // A CollectionView is a "view" over a collection that supports filtering,
+        // sorting, and grouping without modifying the underlying list.
+        private ICollectionView _logsView;
+
+        // Currently-selected log filter.
+        private LogFilter _currentFilter = LogFilter.All;
+
+        // The communication-layer wrapper.
         private readonly IKernelComm _kernel;
 
         public MainWindow()
         {
             InitializeComponent();
 
+            // ---- Operations list: load any persisted entries ----
+            foreach (var op in OperationStore.Load())
+                Operations.Add(op);
+
             OperationsList.ItemsSource = Operations;
-            LogList.ItemsSource = Logs;
 
-            // Instantiate (or inject) your existing communication layer.
-            _kernel = new IKernelComm();
+            // ---- Logs list with filtering ----
+            _logsView = CollectionViewSource.GetDefaultView(Logs);
+            _logsView.Filter = LogFilterPredicate; // return true/false per item
+            LogList.ItemsSource = _logsView;
 
+            UpdateFilterButtonStyles();
+            UpdateLogCountText();
+
+            // ---- Comm layer ----
+            _kernel = new KernelComm();
             // Subscribe to the kernel's log stream BEFORE starting it so we don't miss any.
             _kernel.LogReceived += OnKernelLogReceived;
             _kernel.Start();
@@ -81,26 +101,70 @@ namespace mfuser
             };
             Operations.Add(entry);
 
-            // Send to kernel via your communication layer.
             try
             {
                 bool ok = _kernel.SendOperation(path, op);
+                // Because OperationEntry implements INotifyPropertyChanged,
+                // simply setting Status updates the UI - no Items.Refresh() needed.
                 entry.Status = ok ? "Sent" : "Failed";
                 AddLog($"[UI] {op} {path} -> {entry.Status}",
-                    ok ? Brushes.LightGreen : Brushes.OrangeRed);
+                    ok ? Brushes.LightGreen : Brushes.OrangeRed,
+                    ok ? LogLevel.Info : LogLevel.Error);
             }
             catch (Exception ex)
             {
                 entry.Status = "Error";
-                AddLog($"[UI] Exception: {ex.Message}", Brushes.OrangeRed);
+                AddLog($"[UI] Exception: {ex.Message}", Brushes.OrangeRed, LogLevel.Error);
             }
-
-            // Refresh the row display because OperationEntry doesn't implement INPC here.
-            // if you want the row to update without Refresh(), make OperationEntry implement INotifyPropertyChanged.
-            OperationsList.Items.Refresh();
 
             PathTextBox.Clear();
             PathTextBox.Focus();
+        }
+
+        // =================================================================
+        // Browse button - opens a folder or file picker
+        // =================================================================
+        private void BrowseButton_Click(object sender, RoutedEventArgs e)
+        {
+            // Ask: folder or file? We default to folder since "shield a path"
+            // most commonly means a directory, but offer both.
+            var choice = MessageBox.Show(
+                "Click Yes to pick a FOLDER, No to pick a FILE.",
+                "Browse",
+                MessageBoxButton.YesNoCancel,
+                MessageBoxImage.Question);
+
+            if (choice == MessageBoxResult.Cancel) return;
+
+            if (choice == MessageBoxResult.Yes)
+                BrowseForFolder();
+            else
+                BrowseForFile();
+        }
+
+        private void BrowseForFolder()
+        {
+            // OpenFolderDialog is the modern WPF folder picker (.NET 8+).
+            // If you're on .NET Framework or older .NET, see the note in the
+            // explanation below for the WindowsAPICodePack alternative.
+            var dlg = new OpenFolderDialog
+            {
+                Title = "Select a folder to shield/unshield"
+            };
+            if (dlg.ShowDialog(this) == true)
+                PathTextBox.Text = dlg.FolderName;
+        }
+
+        private void BrowseForFile()
+        {
+            var dlg = new OpenFileDialog
+            {
+                Title = "Select a file to shield/unshield",
+                Filter = "All files (*.*)|*.*",
+                CheckFileExists = true
+            };
+            if (dlg.ShowDialog(this) == true)
+                PathTextBox.Text = dlg.FileName;
         }
 
         // ---------- Log handler (called from background thread) ---------
@@ -113,44 +177,120 @@ namespace mfuser
         // OnClosed unsubscribes and stops the comm layer cleanly when the window closes.
         private void OnKernelLogReceived(object sender, string logLine)
         {
-            // Marshal back to UI thread before touching the ObservableCollection.
-            Dispatcher.Invoke(() => AddLog(logLine, ColorFor(logLine)));
+            // Marshal to UI thread - kernel events can fire on any thread.
+            Dispatcher.Invoke(() =>
+            {
+                var (color, level) = ClassifyLog(logLine);
+                AddLog(logLine, color, level);
+            });
         }
 
-        private void AddLog(string text, Brush color)
+        private void AddLog(string text, Brush color, LogLevel level)
         {
             Logs.Add(new LogEntry
             {
                 Display = $"[{DateTime.Now:HH:mm:ss}] {text}",
-                Color = color
+                Color = color,
+                Level = level
             });
 
-            // Cap log history to keep memory in check.
             const int maxLogs = 5000;
             while (Logs.Count > maxLogs) Logs.RemoveAt(0);
+
+            UpdateLogCountText();
 
             if (AutoScrollCheckBox.IsChecked == true)
                 LogScrollViewer.ScrollToEnd();
         }
 
-        private static Brush ColorFor(string line)
+        private static (Brush color, LogLevel level) ClassifyLog(string line)
         {
-            if (string.IsNullOrEmpty(line)) return Brushes.LightGray;
+            if (string.IsNullOrEmpty(line)) return (Brushes.LightGray, LogLevel.Info);
             var lower = line.ToLowerInvariant();
             if (lower.Contains("error") || lower.Contains("fail"))
-                return Brushes.OrangeRed;
+                return (Brushes.OrangeRed, LogLevel.Error);
             if (lower.Contains("warn"))
-                return Brushes.Khaki;
+                return (Brushes.Khaki, LogLevel.Warning);
             if (lower.Contains("shield") || lower.Contains("unshield"))
-                return Brushes.LightSkyBlue;
-            return Brushes.LightGray;
+                return (Brushes.LightSkyBlue, LogLevel.Info);
+            return (Brushes.LightGray, LogLevel.Info);
         }
 
         private void ClearLogsButton_Click(object sender, RoutedEventArgs e)
-            => Logs.Clear();
+        {
+            Logs.Clear();
+            UpdateLogCountText();
+        }
 
+        private void ClearOperationsButton_Click(object sender, RoutedEventArgs e)
+        {
+            var result = MessageBox.Show(
+                "Clear all submitted operations? This cannot be undone.",
+                "Confirm clear", MessageBoxButton.YesNo, MessageBoxImage.Question);
+            if (result == MessageBoxResult.Yes)
+                Operations.Clear();
+        }
+
+        // =================================================================
+        // Filter buttons
+        // =================================================================
+        private void FilterButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button b && b.Tag is string tag &&
+                Enum.TryParse<LogFilter>(tag, out var f))
+            {
+                _currentFilter = f;
+                _logsView.Refresh();
+                UpdateFilterButtonStyles();
+                UpdateLogCountText();
+            }
+        }
+
+        private bool LogFilterPredicate(object obj)
+        {
+            if (!(obj is LogEntry log)) return false;
+            switch (_currentFilter)
+            {
+                case LogFilter.Errors: return log.Level == LogLevel.Error;
+                case LogFilter.Warnings:
+                    return log.Level == LogLevel.Warning
+                                              || log.Level == LogLevel.Error;
+                default: return true;
+            }
+        }
+
+        private void UpdateFilterButtonStyles()
+        {
+            Highlight(FilterAllButton, _currentFilter == LogFilter.All);
+            Highlight(FilterWarningsButton, _currentFilter == LogFilter.Warnings);
+            Highlight(FilterErrorsButton, _currentFilter == LogFilter.Errors);
+        }
+
+        private static void Highlight(Button btn, bool active)
+        {
+            btn.Background = active
+                ? new SolidColorBrush(Color.FromRgb(0x0E, 0x63, 0x9C))  // active blue
+                : new SolidColorBrush(Color.FromRgb(0x3A, 0x3A, 0x3D)); // muted gray
+        }
+
+        private void UpdateLogCountText()
+        {
+            int shown = 0;
+            foreach (var _ in _logsView) shown++;
+            LogCountText.Text = $"({shown}/{Logs.Count})";
+        }
+
+        // =================================================================
+        // Persistence on close
+        // =================================================================
         protected override void OnClosed(EventArgs e)
         {
+            try
+            {
+                OperationStore.Save(Operations);
+            }
+            catch { /* best-effort */ }
+
             _kernel.LogReceived -= OnKernelLogReceived;
             _kernel.Stop();
             base.OnClosed(e);

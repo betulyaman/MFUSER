@@ -23,6 +23,23 @@
             </Style.Triggers>
         </Style>
 
+        <!-- Smaller, neutral button used in the input row + filter bar -->
+        <Style x:Key="MutedButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="#3A3A3D"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#505054"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Toggle-like filter button. The "active" look is set in code-behind. -->
+        <Style x:Key="FilterButton" TargetType="Button" BasedOn="{StaticResource MutedButton}">
+            <Setter Property="MinWidth" Value="70"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+        </Style>
+
         <Style TargetType="TextBox">
             <Setter Property="Background" Value="#2D2D30"/>
             <Setter Property="Foreground" Value="White"/>
@@ -75,8 +92,15 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <TextBlock Grid.Row="0" Text="Submitted Operations"
-                               Style="{StaticResource HeaderStyle}"/>
+                    <DockPanel Grid.Row="0" LastChildFill="False">
+                        <TextBlock Text="Submitted Operations"
+                                   Style="{StaticResource HeaderStyle}"
+                                   DockPanel.Dock="Left"/>
+                        <Button x:Name="ClearOperationsButton" Content="Clear"
+                                Style="{StaticResource MutedButton}"
+                                DockPanel.Dock="Right"
+                                Click="ClearOperationsButton_Click"/>
+                    </DockPanel>
 
                     <ListView Grid.Row="1" x:Name="OperationsList"
                               Background="#1E1E1E" Foreground="White"
@@ -85,11 +109,11 @@
                             <GridView>
                                 <GridViewColumn Header="#" Width="40"
                                     DisplayMemberBinding="{Binding Index}"/>
-                                <GridViewColumn Header="Path" Width="300"
+                                <GridViewColumn Header="Path" Width="280"
                                     DisplayMemberBinding="{Binding Path}"/>
-                                <GridViewColumn Header="Operation" Width="100"
+                                <GridViewColumn Header="Operation" Width="90"
                                     DisplayMemberBinding="{Binding Operation}"/>
-                                <GridViewColumn Header="Status" Width="80"
+                                <GridViewColumn Header="Status" Width="90"
                                     DisplayMemberBinding="{Binding Status}"/>
                             </GridView>
                         </ListView.View>
@@ -108,26 +132,31 @@
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="140"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.ColumnSpan="3" Text="New Operation"
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="New Operation"
                                Style="{StaticResource HeaderStyle}"/>
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Path"
                                Style="{StaticResource LabelStyle}"/>
-                    <TextBlock Grid.Row="1" Grid.Column="1" Text="Operation"
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Operation"
                                Style="{StaticResource LabelStyle}" Margin="6,0,0,4"/>
 
                     <TextBox Grid.Row="2" Grid.Column="0" x:Name="PathTextBox"
                              KeyDown="PathTextBox_KeyDown"/>
-                    <ComboBox Grid.Row="2" Grid.Column="1" x:Name="OperationComboBox"
+                    <Button  Grid.Row="2" Grid.Column="1" x:Name="BrowseButton"
+                             Content="Browse..." Margin="6,0,0,0"
+                             Style="{StaticResource MutedButton}"
+                             Click="BrowseButton_Click"/>
+                    <ComboBox Grid.Row="2" Grid.Column="2" x:Name="OperationComboBox"
                               Margin="6,0,0,0">
                         <ComboBoxItem Content="shield" IsSelected="True"/>
                         <ComboBoxItem Content="unshield"/>
                     </ComboBox>
-                    <Button Grid.Row="2" Grid.Column="2" x:Name="SubmitButton"
+                    <Button Grid.Row="2" Grid.Column="3" x:Name="SubmitButton"
                             Content="Submit" Margin="6,0,0,0"
                             Click="SubmitButton_Click"/>
                 </Grid>
@@ -144,6 +173,7 @@
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
@@ -156,7 +186,24 @@
                             Background="#5A1D1D"/>
                 </DockPanel>
 
-                <Border Grid.Row="1" Background="#1E1E1E" BorderBrush="#3F3F46"
+                <!-- Filter bar -->
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,6">
+                    <TextBlock Text="Show:" Foreground="#CCCCCC"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <Button x:Name="FilterAllButton" Content="All"
+                            Style="{StaticResource FilterButton}"
+                            Click="FilterButton_Click" Tag="All"/>
+                    <Button x:Name="FilterWarningsButton" Content="Warnings"
+                            Style="{StaticResource FilterButton}"
+                            Click="FilterButton_Click" Tag="Warnings"/>
+                    <Button x:Name="FilterErrorsButton" Content="Errors"
+                            Style="{StaticResource FilterButton}"
+                            Click="FilterButton_Click" Tag="Errors"/>
+                    <TextBlock x:Name="LogCountText" Foreground="#888888"
+                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </StackPanel>
+
+                <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#3F3F46"
                         BorderThickness="1">
                     <ScrollViewer x:Name="LogScrollViewer"
                                   VerticalScrollBarVisibility="Auto">
@@ -175,7 +222,7 @@
                     </ScrollViewer>
                 </Border>
 
-                <CheckBox Grid.Row="2" x:Name="AutoScrollCheckBox"
+                <CheckBox Grid.Row="3" x:Name="AutoScrollCheckBox"
                           Content="Auto-scroll" Foreground="#CCCCCC"
                           IsChecked="True" Margin="0,6,0,0"/>
             </Grid>

@@ -66,10 +66,21 @@ namespace mfuser.Services
         private void ReadLoop(CancellationToken ct)
         {
             int i = 0;
+            var rng = new Random();
+            string[] samples =
+            {
+                "[kernel] heartbeat",
+                "[kernel] shield applied to handle 0x{0:X4}",
+                "[kernel] WARN: queue depth high ({0})",
+                "[kernel] ERROR: failed to open device, code {0}",
+                "[kernel] unshield completed in {0} ms"
+            };
+
             while (!ct.IsCancellationRequested)
             {
-                Thread.Sleep(2000);
-                LogReceived?.Invoke(this, $"[kernel] heartbeat #{++i}");
+                Thread.Sleep(1500);
+                var template = samples[rng.Next(samples.Length)];
+                LogReceived?.Invoke(this, string.Format(template, rng.Next(1, 9999)) + $" #{++i}");
             }
         }
     }
