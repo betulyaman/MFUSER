@@ -22,7 +22,7 @@ namespace mfuser
         public ObservableCollection<OperationEntry> Operations { get; }
             = new ObservableCollection<OperationEntry>();
 
-        // Bound to the right-side log list.
+        // Backing storage for log entries.
         public ObservableCollection<LogEntry> Logs { get; }
             = new ObservableCollection<LogEntry>();
 
@@ -56,13 +56,13 @@ namespace mfuser
 
             // ---- Comm layer ----
             _kernel = new KernelComm();
-            // Subscribe to the kernel's log stream BEFORE starting it so we don't miss any.
             _kernel.LogReceived += OnKernelLogReceived;
             _kernel.Start();
         }
 
-        // ---------- Submit handler ----------
-
+        // =================================================================
+        // Submit flow
+        // =================================================================
         // When the user clicks Submit(or presses Enter in the path box),
         // SubmitCurrentInput() runs:
         //  - it validates the path,
@@ -70,6 +70,7 @@ namespace mfuser
         //  - creates an OperationEntry row with status "Sending...",
         //  - calls _kernel.SendOperation(path, op),
         //  - and updates the row's status based on the result.
+
         private void SubmitButton_Click(object sender, RoutedEventArgs e)
             => SubmitCurrentInput();
 
@@ -122,40 +123,9 @@ namespace mfuser
         }
 
         // =================================================================
-        // Browse button - opens a folder or file picker
+        // Browse buttons - one for files, one for folders
         // =================================================================
-        private void BrowseButton_Click(object sender, RoutedEventArgs e)
-        {
-            // Ask: folder or file? We default to folder since "shield a path"
-            // most commonly means a directory, but offer both.
-            var choice = MessageBox.Show(
-                "Click Yes to pick a FOLDER, No to pick a FILE.",
-                "Browse",
-                MessageBoxButton.YesNoCancel,
-                MessageBoxImage.Question);
-
-            if (choice == MessageBoxResult.Cancel) return;
-
-            if (choice == MessageBoxResult.Yes)
-                BrowseForFolder();
-            else
-                BrowseForFile();
-        }
-
-        private void BrowseForFolder()
-        {
-            // OpenFolderDialog is the modern WPF folder picker (.NET 8+).
-            // If you're on .NET Framework or older .NET, see the note in the
-            // explanation below for the WindowsAPICodePack alternative.
-            var dlg = new OpenFolderDialog
-            {
-                Title = "Select a folder to shield/unshield"
-            };
-            if (dlg.ShowDialog(this) == true)
-                PathTextBox.Text = dlg.FolderName;
-        }
-
-        private void BrowseForFile()
+        private void BrowseFileButton_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new OpenFileDialog
             {
@@ -167,14 +137,29 @@ namespace mfuser
                 PathTextBox.Text = dlg.FileName;
         }
 
-        // ---------- Log handler (called from background thread) ---------
+        private void BrowseFolderButton_Click(object sender, RoutedEventArgs e)
+        {
+            // OpenFolderDialog is the modern WPF folder picker (.NET 8+).
+            // For older targets, swap to System.Windows.Forms.FolderBrowserDialog
+            // or Ookii.Dialogs.Wpf.VistaFolderBrowserDialog.
+            var dlg = new OpenFolderDialog
+            {
+                Title = "Select a folder to shield/unshield"
+            };
+            if (dlg.ShowDialog(this) == true)
+                PathTextBox.Text = dlg.FolderName;
+        }
 
+        // =================================================================
+        // Log handling
+        // =================================================================
         // The kernel communication layer raises a LogReceived event for every log line.
         // The UI subscribes once in the constructor. Because the event probably fires on a background thread(kernel reader thread, named-pipe thread, etc.),
         // the handler wraps the actual UI update in Dispatcher.Invoke(...) — this is essential, otherwise you'll get cross-thread exceptions when modifying Logs.
         // Each log line is timestamped and color-coded based on keywords (error/fail - red, warn - yellow, shield/unshield - blue).
         // The list is capped at 5000 entries to keep memory bounded, and auto-scroll is honored if the checkbox is on.
         // OnClosed unsubscribes and stops the comm layer cleanly when the window closes.
+
         private void OnKernelLogReceived(object sender, string logLine)
         {
             // Marshal to UI thread - kernel events can fire on any thread.
@@ -254,7 +239,7 @@ namespace mfuser
                 case LogFilter.Errors: return log.Level == LogLevel.Error;
                 case LogFilter.Warnings:
                     return log.Level == LogLevel.Warning
-                                              || log.Level == LogLevel.Error;
+                        || log.Level == LogLevel.Error;
                 default: return true;
             }
         }

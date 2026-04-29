@@ -133,30 +133,37 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="140"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="New Operation"
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Text="New Operation"
                                Style="{StaticResource HeaderStyle}"/>
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Path"
                                Style="{StaticResource LabelStyle}"/>
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Operation"
+                    <TextBlock Grid.Row="1" Grid.Column="3" Text="Operation"
                                Style="{StaticResource LabelStyle}" Margin="6,0,0,4"/>
 
                     <TextBox Grid.Row="2" Grid.Column="0" x:Name="PathTextBox"
                              KeyDown="PathTextBox_KeyDown"/>
-                    <Button  Grid.Row="2" Grid.Column="1" x:Name="BrowseButton"
-                             Content="Browse..." Margin="6,0,0,0"
+                    <Button  Grid.Row="2" Grid.Column="1" x:Name="BrowseFileButton"
+                             Content="File..." Margin="6,0,0,0"
+                             ToolTip="Pick a file"
                              Style="{StaticResource MutedButton}"
-                             Click="BrowseButton_Click"/>
-                    <ComboBox Grid.Row="2" Grid.Column="2" x:Name="OperationComboBox"
+                             Click="BrowseFileButton_Click"/>
+                    <Button  Grid.Row="2" Grid.Column="2" x:Name="BrowseFolderButton"
+                             Content="Folder..." Margin="4,0,0,0"
+                             ToolTip="Pick a folder"
+                             Style="{StaticResource MutedButton}"
+                             Click="BrowseFolderButton_Click"/>
+                    <ComboBox Grid.Row="2" Grid.Column="3" x:Name="OperationComboBox"
                               Margin="6,0,0,0">
                         <ComboBoxItem Content="shield" IsSelected="True"/>
                         <ComboBoxItem Content="unshield"/>
                     </ComboBox>
-                    <Button Grid.Row="2" Grid.Column="3" x:Name="SubmitButton"
+                    <Button Grid.Row="2" Grid.Column="4" x:Name="SubmitButton"
                             Content="Submit" Margin="6,0,0,0"
                             Click="SubmitButton_Click"/>
                 </Grid>
