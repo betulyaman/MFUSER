@@ -10,6 +10,12 @@ public interface IKernelComm
     /// <summary>Raised whenever the kernel sends a log line. May fire on a background thread.</summary>
     event EventHandler<string>? LogReceived;
 
+    /// <summary>
+    /// Raised when the minifilter reports a blocked operation on a shielded file. 
+    /// Subscribers decide whether to unshield (typically by prompting the user).
+    /// </summary>
+    event EventHandler<MessageContract.UnauthorizedOperationInfo>? UnauthorizedOperationDetected;
+
     /// <summary>Open the channel and start listening for kernel logs.</summary>
     void Start();
 
@@ -35,6 +41,7 @@ public sealed class KernelComm : IKernelComm
     private static readonly TimeSpan BlacklistPollInterval = TimeSpan.FromSeconds(30);
 
     public event EventHandler<string>? LogReceived;
+    public event EventHandler<MessageContract.UnauthorizedOperationInfo>? UnauthorizedOperationDetected;
 
     private CancellationTokenSource? _readerCts;
     private Task? _listenerTask;
@@ -247,30 +254,26 @@ public sealed class KernelComm : IKernelComm
     }
 
     /// <summary>
-    /// Spec: when the minifilter reports a blocked operation, the agent
-    /// triggers the unshield flow for that path and notifies the driver so
-    /// the file can be removed from protection.
+    /// Forwards the listener's unauthorized-op notification up to subscribers
+    /// (typically the UI). Ask the user and, if confirmed, call SendOperation
+    /// with operation = "unshield".
     /// </summary>
     private void OnUnauthorizedOperationDetected(object? sender, MessageContract.UnauthorizedOperationInfo op)
     {
         LogReceived?.Invoke(this, $"[kernel] UNAUTHORIZED {op.MinifilterOperationType} on {op.FileName}");
 
-        PolicySyncService? policy = _policySyncService;
-        if (policy is null || string.IsNullOrWhiteSpace(op.FileName))
+        if (string.IsNullOrWhiteSpace(op.FileName))
         {
             return;
         }
 
         try
         {
-            policy.InformDriver(op.FileName, ShieldOperationType.Unshield);
-            BlacklistService.MarkBlacklistDirty();
-            LogReceived?.Invoke(this, $"-> kernel: auto-unshield {op.FileName}");
+            UnauthorizedOperationDetected?.Invoke(this, op);
         }
         catch (Exception ex)
         {
-            Logger.Error(ex, "MINIFILTER: Auto-unshield failed for {Path}.", op.FileName);
-            LogReceived?.Invoke(this, $"-> kernel: auto-unshield FAILED {op.FileName} ({ex.Message})");
+            Logger.Error(ex, "MINIFILTER: UnauthorizedOperationDetected subscriber threw.");
         }
     }
 }

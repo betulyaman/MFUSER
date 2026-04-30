@@ -74,7 +74,48 @@ public partial class MainWindow : Window
         // ---- Comm layer ----
         _kernel = new KernelComm();
         _kernel.LogReceived += OnKernelLogReceived;
+        _kernel.UnauthorizedOperationDetected += OnKernelUnauthorizedOperationDetected;
         _kernel.Start();
+    }
+
+    // =================================================================
+    // Unauthorized operation prompt
+    // =================================================================
+    // The minifilter raises this when it blocks a DELETE/MOVE/RENAME on a
+    // shielded file. DO NOT auto-unshield — instead ask the user, and
+    // only on Yes do route a normal unshield through SendOperation so a
+    // row appears in the Operations list with proper Sent/Failed/Error status.
+    private void OnKernelUnauthorizedOperationDetected(object? sender, MessageContract.UnauthorizedOperationInfo op)
+    {
+        // Listener events fire on a background thread; marshal to the UI.
+        Dispatcher.Invoke(() =>
+        {
+            string detail = string.IsNullOrWhiteSpace(op.TargetName)
+                ? op.FileName
+                : $"{op.FileName}\n  → {op.TargetName}";
+
+            MessageBoxResult choice = MessageBox.Show(
+                $"The minifilter blocked a {op.MinifilterOperationType} operation:\n\n{detail}\n\nDo you want to unshield this path?",
+                "Unauthorized operation",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+
+            if (choice != MessageBoxResult.Yes)
+            {
+                AddLog($"[UI] User declined unshield for {op.FileName}", ColorWarning, LogLevel.Warning);
+                return;
+            }
+
+            var entry = new OperationEntry
+            {
+                Index = Operations.Count + 1,
+                Path = op.FileName,
+                Operation = "unshield",
+                Status = "Sending...",
+            };
+            Operations.Add(entry);
+            RunOperationOnEntry(entry, "unshield", source: "auto-prompt");
+        });
     }
 
     // =================================================================
@@ -382,6 +423,7 @@ public partial class MainWindow : Window
         }
 
         _kernel.LogReceived -= OnKernelLogReceived;
+        _kernel.UnauthorizedOperationDetected -= OnKernelUnauthorizedOperationDetected;
         _kernel.Stop();
         base.OnClosed(e);
     }
