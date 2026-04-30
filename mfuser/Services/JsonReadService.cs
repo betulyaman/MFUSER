@@ -25,6 +25,70 @@ public static class JsonReadService
         }
     }
 
+    /// <summary>
+    /// Returns the most-specific currently-shielded path that contains
+    /// <paramref name="filePath"/> (the file itself, or any ancestor folder).
+    /// Returns <c>null</c> if no ancestor (or the file itself) is shielded.
+    /// </summary>
+    /// <remarks>
+    /// Used by the UI to coalesce many unauthorized-op prompts (one per file
+    /// under a shielded folder, plus one for the folder itself) into a single
+    /// prompt for the folder. Comparison is case-insensitive and ignores any
+    /// trailing directory separator on either side, so it doesn't matter
+    /// whether the user typed "C:\Important" or "C:\Important\", or whether
+    /// the kernel reports "C:\important\file.txt" or "\\?\C:\important\".
+    /// </remarks>
+    public static string? FindShieldedAncestor(string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath)) return null;
+
+        string fileNormalized = TrimTrailingSeparator(filePath);
+
+        string? bestMatch = null;
+        int bestLength = -1;
+
+        foreach (string shieldedPath in GetCurrentlyShieldedPaths())
+        {
+            string shieldedNormalized = TrimTrailingSeparator(shieldedPath);
+            if (shieldedNormalized.Length == 0) continue;
+
+            bool isExactMatch = string.Equals(
+                fileNormalized,
+                shieldedNormalized,
+                StringComparison.OrdinalIgnoreCase);
+
+            bool isUnder =
+                fileNormalized.Length > shieldedNormalized.Length
+                && fileNormalized.StartsWith(shieldedNormalized, StringComparison.OrdinalIgnoreCase)
+                && IsDirectorySeparator(fileNormalized[shieldedNormalized.Length]);
+
+            if ((isExactMatch || isUnder) && shieldedNormalized.Length > bestLength)
+            {
+                bestMatch = shieldedPath; // return the user-submitted form
+                bestLength = shieldedNormalized.Length;
+            }
+        }
+
+        return bestMatch;
+    }
+
+    private static string TrimTrailingSeparator(string path)
+    {
+        // Keep drive roots ("C:\", "D:\") intact; trim only trailing separators
+        // on longer paths.
+        if (path.Length <= 3) return path;
+
+        int end = path.Length;
+        while (end > 0 && IsDirectorySeparator(path[end - 1]))
+        {
+            end--;
+        }
+        return end == path.Length ? path : path[..end];
+    }
+
+    private static bool IsDirectorySeparator(char c) =>
+        c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar;
+
     // Reduce the entries in the JSON file to one path per Path (last-wins),
     // then yield only the paths that are currently shielded.
     private static IEnumerable<string> GetCurrentlyShieldedPaths()

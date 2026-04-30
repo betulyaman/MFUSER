@@ -48,6 +48,9 @@ public partial class MainWindow : Window
     // the view every time we add a log line.
     private int _filteredLogCount;
 
+    // Stops asking the user with N dialogs files under one shielded folder. 
+    private readonly HashSet<string> _promptedSubjects = new(StringComparer.OrdinalIgnoreCase);
+
     // The communication-layer wrapper.
     private readonly IKernelComm _kernel;
 
@@ -85,31 +88,58 @@ public partial class MainWindow : Window
     // shielded file. DO NOT auto-unshield — instead ask the user, and
     // only on Yes do route a normal unshield through SendOperation so a
     // row appears in the Operations list with proper Sent/Failed/Error status.
+    //
+    // Many ops for files under the same shielded folder coalesce into ONE
+    // prompt for the folder. We resolve the closest currently-shielded
+    // ancestor (folder or, failing that, the file itself), and remember it
+    // in _promptedSubjects so subsequent ops for files under the same
+    // ancestor are dropped silently. The dedupe entry is cleared whenever
+    // the user manually shields/unshields that path so re-shielding the
+    // same folder later re-arms the prompt.
     private void OnKernelUnauthorizedOperationDetected(object? sender, MessageContract.UnauthorizedOperationInfo op)
     {
         // Listener events fire on a background thread; marshal to the UI.
         Dispatcher.Invoke(() =>
         {
-            string detail = string.IsNullOrWhiteSpace(op.TargetName)
-                ? op.FileName
-                : $"{op.FileName}\n  → {op.TargetName}";
+            // Resolve the prompt subject: the shielded folder containing the
+            // file if one exists, otherwise the file itself.
+            string subject = JsonReadService.FindShieldedAncestor(op.FileName) ?? op.FileName;
+
+            // Coalesce: one prompt per subject. Subsequent ops for files
+            // under the same shielded folder are dropped (logged as info).
+            if (!_promptedSubjects.Add(subject))
+            {
+                AddLog(
+                    $"[UI] {op.MinifilterOperationType} on {op.FileName} (already prompted for {subject})",
+                    ColorMuted,
+                    LogLevel.Info);
+                return;
+            }
+
+            bool subjectIsFolder =
+                !string.Equals(subject, op.FileName, StringComparison.OrdinalIgnoreCase)
+                || PathExpander.IsDirectory(subject);
+
+            string promptBody = subjectIsFolder
+                ? $"The minifilter blocked a {op.MinifilterOperationType} operation on a file under shielded folder:\n\n{subject}\n\nFile: {op.FileName}\n\nDo you want to unshield this folder (and everything inside)?"
+                : $"The minifilter blocked a {op.MinifilterOperationType} operation:\n\n{op.FileName}\n\nDo you want to unshield this path?";
 
             MessageBoxResult choice = MessageBox.Show(
-                $"The minifilter blocked a {op.MinifilterOperationType} operation:\n\n{detail}\n\nDo you want to unshield this path?",
+                promptBody,
                 "Unauthorized operation",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Question);
 
             if (choice != MessageBoxResult.Yes)
             {
-                AddLog($"[UI] User declined unshield for {op.FileName}", ColorWarning, LogLevel.Warning);
+                AddLog($"[UI] User declined unshield for {subject}", ColorWarning, LogLevel.Warning);
                 return;
             }
 
             var entry = new OperationEntry
             {
                 Index = Operations.Count + 1,
-                Path = op.FileName,
+                Path = subject,
                 Operation = "unshield",
                 Status = "Sending...",
             };
@@ -225,6 +255,11 @@ public partial class MainWindow : Window
         // Capture the path locally so the background work is independent of
         // any later mutations to the entry.
         string path = entry.Path;
+
+        // Reset auto-prompt dedupe for this path: any subsequent unauthorized
+        // op for files under it should re-prompt (the user just changed their
+        // mind about its shield state).
+        _promptedSubjects.Remove(path);
 
         Task.Run(() =>
         {
