@@ -2,10 +2,9 @@ using mfuser.Models;
 using mfuser.Services;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
-using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -34,18 +33,17 @@ public partial class MainWindow : Window
     /// </summary>
     public ObservableCollection<OperationEntry> Operations { get; } = new();
 
-    /// <summary>Backing storage for log entries.</summary>
+    /// <summary>Backing storage for every log entry, in arrival order.
+    /// Logs that don't pass <see cref="_currentFilter"/> are still kept here
+    /// so a filter change can re-show them; only the FlowDocument paragraphs
+    /// represent the currently visible subset.</summary>
     public ObservableCollection<LogEntry> Logs { get; } = new();
-
-    // A CollectionView is a "view" over a collection that supports filtering,
-    // sorting, and grouping without modifying the underlying list.
-    private readonly ICollectionView _logsView;
 
     // Currently-selected log filter.
     private LogFilter _currentFilter = LogFilter.All;
 
     // Cached count of entries the filter currently lets through. Avoids re-enumerating
-    // the view every time we add a log line.
+    // Logs on every log line.
     private int _filteredLogCount;
 
     // Stops asking the user with N dialogs files under one shielded folder. 
@@ -66,11 +64,9 @@ public partial class MainWindow : Window
 
         OperationsList.ItemsSource = Operations;
 
-        // ---- Logs list with filtering ----
-        _logsView = CollectionViewSource.GetDefaultView(Logs);
-        _logsView.Filter = LogFilterPredicate;
-        LogList.ItemsSource = _logsView;
-
+        // ---- Logs pane (RichTextBox) ----
+        // RichTextBox renders one Paragraph per filtered log entry; the
+        // FlowDocument is built from XAML and we just append/remove blocks.
         UpdateFilterButtonStyles();
         UpdateLogCountText();
 
@@ -358,22 +354,47 @@ public partial class MainWindow : Window
         };
 
         Logs.Add(entry);
-        if (Passes(_currentFilter, level)) _filteredLogCount++;
 
-        // Trim the head to keep memory bounded.
+        // Append a paragraph for it if the current filter lets it through.
+        bool passes = Passes(_currentFilter, level);
+        if (passes)
+        {
+            LogList.Document.Blocks.Add(CreateLogParagraph(entry));
+            _filteredLogCount++;
+        }
+
+        // Trim the head to keep memory bounded. Remove the matching paragraph
+        // (the first one in the document) only when the trimmed entry passed
+        // the current filter — otherwise no paragraph exists for it.
         while (Logs.Count > MaxLogEntries)
         {
             LogEntry removed = Logs[0];
-            if (Passes(_currentFilter, removed.Level)) _filteredLogCount--;
             Logs.RemoveAt(0);
+
+            if (Passes(_currentFilter, removed.Level))
+            {
+                Block? firstBlock = LogList.Document.Blocks.FirstBlock;
+                if (firstBlock is not null) LogList.Document.Blocks.Remove(firstBlock);
+                _filteredLogCount--;
+            }
         }
 
         UpdateLogCountText();
 
-        if (AutoScrollCheckBox.IsChecked == true)
+        if (passes && AutoScrollCheckBox.IsChecked == true)
         {
-            LogScrollViewer.ScrollToEnd();
+            LogList.ScrollToEnd();
         }
+    }
+
+    /// <summary>Builds a tight, color-coded Paragraph for one log entry.</summary>
+    private static Paragraph CreateLogParagraph(LogEntry entry)
+    {
+        return new Paragraph(new Run(entry.Display) { Foreground = entry.Color })
+        {
+            Margin = new Thickness(0),
+            LineHeight = 14,
+        };
     }
 
     private static (Brush color, LogLevel level) ClassifyLog(string line)
@@ -390,6 +411,7 @@ public partial class MainWindow : Window
     private void ClearLogsButton_Click(object sender, RoutedEventArgs e)
     {
         Logs.Clear();
+        LogList.Document.Blocks.Clear();
         _filteredLogCount = 0;
         UpdateLogCountText();
     }
@@ -413,15 +435,30 @@ public partial class MainWindow : Window
         if (sender is Button { Tag: string tag } && Enum.TryParse(tag, out LogFilter f))
         {
             _currentFilter = f;
-            _logsView.Refresh();
-            RecomputeFilteredCount();
+            RebuildLogDocument();
             UpdateFilterButtonStyles();
             UpdateLogCountText();
         }
     }
 
-    private bool LogFilterPredicate(object obj) =>
-        obj is LogEntry log && Passes(_currentFilter, log.Level);
+    /// <summary>
+    /// Rebuilds the FlowDocument from <see cref="Logs"/> using the current
+    /// filter. Called when the user changes the filter button selection.
+    /// </summary>
+    private void RebuildLogDocument()
+    {
+        LogList.Document.Blocks.Clear();
+        int count = 0;
+        foreach (LogEntry entry in Logs)
+        {
+            if (Passes(_currentFilter, entry.Level))
+            {
+                LogList.Document.Blocks.Add(CreateLogParagraph(entry));
+                count++;
+            }
+        }
+        _filteredLogCount = count;
+    }
 
     private static bool Passes(LogFilter filter, LogLevel level) => filter switch
     {

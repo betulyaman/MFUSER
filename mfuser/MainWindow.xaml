@@ -225,21 +225,26 @@
 
                 <Border Grid.Row="2" Background="#1E1E1E" BorderBrush="#3F3F46"
                         BorderThickness="1">
-                    <ScrollViewer x:Name="LogScrollViewer"
-                                  VerticalScrollBarVisibility="Auto">
-                        <ItemsControl x:Name="LogList">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding Display}"
-                                               Foreground="{Binding Color}"
-                                               FontFamily="Consolas"
-                                               FontSize="12"
-                                               TextWrapping="Wrap"
-                                               Padding="6,2"/>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
+                    <!-- A single read-only RichTextBox so the user can drag-select
+                         across multiple log lines, Ctrl+A to select all, Ctrl+C to
+                         copy, and right-click to copy. Each log entry is one
+                         Paragraph with a colored Run. -->
+                    <RichTextBox x:Name="LogList"
+                                 Background="#1E1E1E"
+                                 Foreground="LightGray"
+                                 BorderThickness="0"
+                                 FontFamily="Consolas"
+                                 FontSize="12"
+                                 IsReadOnly="True"
+                                 IsReadOnlyCaretVisible="False"
+                                 IsDocumentEnabled="False"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 SelectionBrush="#264F78">
+                        <RichTextBox.Document>
+                            <FlowDocument PagePadding="6,2,6,2"/>
+                        </RichTextBox.Document>
+                    </RichTextBox>
                 </Border>
 
                 <CheckBox Grid.Row="3" x:Name="AutoScrollCheckBox"
