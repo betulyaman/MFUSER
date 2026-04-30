@@ -33,7 +33,7 @@ public sealed class ConnectionService : IDisposable
     private const string CommunicationPortSendMessageToKernel = "\\CommunicationPortUserToKernel";
     private const string CommunicationPortReceiveMessageFromKernel = "\\CommunicationPortKernelToUser";
 
-    public static string DatabasePath { get; set; } = @"E:\workspace\mfuser\operations.json";
+    public static string DatabasePath { get; set; } = @"C:\Windows\minifilter_secure_folder\operations.json";
 
     private MinifilterPortHandle? _sendToKernelPortHandle;
     private MinifilterPortHandle? _receiveFromKernelPortHandle;

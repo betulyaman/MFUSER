@@ -13,4 +13,19 @@
     <PackageReference Include="Serilog" Version="4.3.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="icr.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="minifilter_communication_lib.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="Services\Dependency\icr.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="Services\Dependency\minifilter_communication_lib.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

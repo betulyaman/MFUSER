@@ -4,7 +4,7 @@ namespace mfuser.Services;
 
 public static class CryptoMaterialProvider
 {
-    private const string KeyDirectory = @"E:\workspace\mf_user\keys";
+    private const string KeyDirectory = @"C:\Windows\minifilter_secure_folder\";
 
     private static readonly string KernelSignPublicKeyFilePath = Path.Combine(KeyDirectory, "kernel_sign_pub_key.txt");
     private static readonly string KernelEncryptionPublicKeyFilePath = Path.Combine(KeyDirectory, "kernel_encrypt_pub_key.txt");

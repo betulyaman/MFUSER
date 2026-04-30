@@ -12,7 +12,7 @@ public static class OperationStore
 {
     private static readonly ILogger Logger = Log.ForContext(typeof(OperationStore));
 
-    public static string FilePath { get; set; } = @"E:\workspace\mfuser\operations.json";
+    public static string FilePath { get; set; } = @"C:\Windows\minifilter_secure_folder\operations.json";
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {

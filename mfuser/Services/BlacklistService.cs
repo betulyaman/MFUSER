@@ -7,7 +7,7 @@ public static class BlacklistService
 {
     private static readonly ILogger Logger = Log.ForContext(typeof(BlacklistService));
 
-    private const string BlacklistFilePath = @"E:\workspace\mfuser\blacklist.txt";
+    private const string BlacklistFilePath = @"C:\Windows\minifilter_secure_folder\blacklist.txt";
 
     private static readonly SemaphoreSlim UpdateLock = new(1, 1);
 
