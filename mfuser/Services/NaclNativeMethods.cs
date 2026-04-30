@@ -1,6 +1,8 @@
 ﻿using System.Runtime.InteropServices;
 
-public class NaclNativeMethods
+namespace mfuser.Services;
+
+public static class NaclNativeMethods
 {
     public const int crypto_box_PUBLICKEYBYTES = 32;
     public const int crypto_box_SECRETKEYBYTES = 32;

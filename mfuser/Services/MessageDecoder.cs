@@ -3,6 +3,8 @@ using System.Collections.ObjectModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
+namespace mfuser.Services;
+
 public static class MessageDecoder
 {
     private static readonly int EncryptedMessageHeaderSize = Unsafe.SizeOf<MessageContract.EncryptedMessageHeader>();
@@ -231,6 +233,8 @@ public static class MessageDecoder
 
         int recoveredPlaintextLength = ciphertextBytes.Length - NaclNativeMethods.crypto_box_ZEROBYTES;
 
+        // Shift the recovered plaintext left over the leading ZERO_BYTES region.
+        // Span.CopyTo handles this overlapping-buffer case correctly.
         decryptedBuffer.AsSpan(
             NaclNativeMethods.crypto_box_ZEROBYTES,
             recoveredPlaintextLength).CopyTo(decryptedBuffer);

@@ -9,6 +9,8 @@
 
 using System.Runtime.InteropServices;
 
+namespace mfuser.Services;
+
 public static class MessageContract
 {
     public const uint MaxCiphertextBytes = 16u * 1024u; // 16 KiB

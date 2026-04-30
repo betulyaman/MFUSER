@@ -1,7 +1,10 @@
 ﻿using Serilog;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
-using MinifilterPortHandle = SafeFileHandle;
+
+using MinifilterPortHandle = Microsoft.Win32.SafeHandles.SafeFileHandle;
+
+namespace mfuser.Services;
 
 /// <summary>
 /// Manages connection and authentication to the minifilter communication ports.
@@ -29,6 +32,8 @@ public sealed class ConnectionService : IDisposable
     // Port names should match the minifilter's actual port object names.
     private const string CommunicationPortSendMessageToKernel = "\\CommunicationPortUserToKernel";
     private const string CommunicationPortReceiveMessageFromKernel = "\\CommunicationPortKernelToUser";
+
+    public static string DatabasePath { get; set; } = @"E:\workspace\mfuser\operations.json";
 
     private MinifilterPortHandle? _sendToKernelPortHandle;
     private MinifilterPortHandle? _receiveFromKernelPortHandle;
@@ -428,8 +433,7 @@ public sealed class ConnectionService : IDisposable
             }
 
             string communicationPortName = GetPortName(portKind);
-            ReadOnlyMemory<byte> connectionContextBuffer =
-                await CreateConnectionContextForPortAsync(portKind, cancellationToken).ConfigureAwait(false);
+            ReadOnlyMemory<byte> connectionContextBuffer = CreateConnectionContextForPort(portKind, cancellationToken);
 
             var (result, newHandle) = ConnectCommunicationPort_NoLock(
                 communicationPortName,
@@ -455,13 +459,13 @@ public sealed class ConnectionService : IDisposable
         };
     }
 
-    private async Task<ReadOnlyMemory<byte>> CreateConnectionContextForPortAsync(
+    private ReadOnlyMemory<byte> CreateConnectionContextForPort(
         PortKind portKind,
         CancellationToken cancellationToken)
     {
         return portKind switch
         {
-            PortKind.SendToKernel => await CreateEncryptedConnectionContextAsync(cancellationToken).ConfigureAwait(false),
+            PortKind.SendToKernel => CreateEncryptedConnectionContext(cancellationToken),
             PortKind.ReceiveFromKernel => ReadOnlyMemory<byte>.Empty,
             _ => throw new ArgumentOutOfRangeException(nameof(portKind), portKind, "Unsupported port kind."),
         };
@@ -571,10 +575,9 @@ public sealed class ConnectionService : IDisposable
     /// <summary>
     /// Builds the encrypted connection context sent during communication-port connection.
     /// </summary>
-    private async Task<byte[]> CreateEncryptedConnectionContextAsync(CancellationToken cancellationToken)
+    private byte[] CreateEncryptedConnectionContext(CancellationToken cancellationToken)
     {
-        string databaseNativeNtPathLowercase =
-            PathTranslator.DosPathToNtPath(ConfigurationManager.DbSettings.Path);
+        string databaseNativeNtPathLowercase = PathTranslator.DosPathToNtPath(DatabasePath);
 
         if (string.IsNullOrWhiteSpace(databaseNativeNtPathLowercase))
         {
@@ -583,8 +586,7 @@ public sealed class ConnectionService : IDisposable
 
         HashSet<string> shieldedPathSet = new(StringComparer.OrdinalIgnoreCase);
 
-        await DatabaseReadService.ReadShieldedPathsFromDbAsync(cancellationToken, shieldedPathSet)
-            .ConfigureAwait(false);
+        JsonReadService.ReadShieldedPaths(shieldedPathSet);
 
         List<PayloadBuilders.ConnectionContextPathAccessEntry> normalizedEntries =
             new(shieldedPathSet.Count);

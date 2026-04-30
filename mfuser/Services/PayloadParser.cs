@@ -3,6 +3,8 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 
+namespace mfuser.Services;
+
 public static class PayloadParser
 {
     public readonly struct ParsedLogEntry
@@ -225,12 +227,13 @@ public static class PayloadParser
             ReadOnlySpan<byte> messageBytes =
                 payloadBytes.Slice(offset + LogEntryHeaderSize, messageLengthBytes);
 
-            if (messageBytes[messageBytes.Length - 1] != 0)
+            if (messageBytes[^1] != 0)
             {
                 return false;
             }
 
-            string message = Encoding.UTF8.GetString(messageBytes.Slice(0, messageBytes.Length - 1)); // zero terminating utf8 string
+            // Zero-terminated UTF-8 string; strip the trailing NUL.
+            string message = Encoding.UTF8.GetString(messageBytes[..^1]);
 
             parsedEntries[index] = new ParsedLogEntry
             {

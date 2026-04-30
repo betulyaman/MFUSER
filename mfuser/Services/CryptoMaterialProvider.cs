@@ -1,13 +1,19 @@
-﻿public static class CryptoMaterialProvider
+﻿using System.IO;
+
+namespace mfuser.Services;
+
+public static class CryptoMaterialProvider
 {
-    private static string KernelSignPublicKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\kernel_sign_pub_key.txt";
-    private static string KernelEncryptionPublicKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\kernel_encrypt_pub_key.txt";
+    private const string KeyDirectory = @"E:\workspace\mf_user\keys";
 
-    private static string UserEncryptionPublicKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\user_encrypt_pub_key.txt";
-    private static string UserEncryptionSecretKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\user_encrypt_pri_key.txt";
+    private static readonly string KernelSignPublicKeyFilePath = Path.Combine(KeyDirectory, "kernel_sign_pub_key.txt");
+    private static readonly string KernelEncryptionPublicKeyFilePath = Path.Combine(KeyDirectory, "kernel_encrypt_pub_key.txt");
 
-    private static string UserSignPublicKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\user_sign_pub_key.txt";
-    private static string UserSignSecretKeyFilePath { get; } = @"C:\windows\minifilter_secure_folder\user_sign_pri_key.txt";
+    private static readonly string UserEncryptionPublicKeyFilePath = Path.Combine(KeyDirectory, "user_encrypt_pub_key.txt");
+    private static readonly string UserEncryptionSecretKeyFilePath = Path.Combine(KeyDirectory, "user_encrypt_pri_key.txt");
+
+    private static readonly string UserSignPublicKeyFilePath = Path.Combine(KeyDirectory, "user_sign_pub_key.txt");
+    private static readonly string UserSignSecretKeyFilePath = Path.Combine(KeyDirectory, "user_sign_pri_key.txt");
 
     public static byte[] GetKernelEncryptionPublicKey()
     {

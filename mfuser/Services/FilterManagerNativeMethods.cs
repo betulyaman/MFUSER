@@ -1,6 +1,8 @@
 ﻿using System.Runtime.InteropServices;
 
-using MinifilterPortHandle = SafeFileHandle;
+using MinifilterPortHandle = Microsoft.Win32.SafeHandles.SafeFileHandle;
+
+namespace mfuser.Services;
 
 /// <summary>
 /// Contains native method declarations for communication with the minifilter driver.

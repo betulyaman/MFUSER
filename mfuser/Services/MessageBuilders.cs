@@ -20,6 +20,8 @@
 using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 
+namespace mfuser.Services;
+
 public static class MessageBuilders
 {
     public enum MessageProtection

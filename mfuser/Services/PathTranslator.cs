@@ -1,5 +1,8 @@
 ﻿using System.Buffers;
+using System.IO;
 using System.Runtime.InteropServices;
+
+namespace mfuser.Services;
 
 public static class PathTranslator
 {

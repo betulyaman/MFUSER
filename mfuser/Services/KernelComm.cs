@@ -8,7 +8,7 @@ namespace mfuser.Services;
 public interface IKernelComm
 {
     /// <summary>Raised whenever the kernel sends a log line. May fire on a background thread.</summary>
-    event EventHandler<string> LogReceived;
+    event EventHandler<string>? LogReceived;
 
     /// <summary>Open the channel and start listening for kernel logs.</summary>
     void Start();
@@ -24,47 +24,125 @@ public interface IKernelComm
 }
 
 /// <summary>
-/// Stub implementation. Replace the bodies with calls into your existing
-/// communication layer (DeviceIoControl, named pipe, FilterSendMessage, etc.).
+/// Owns the lifecycle of the minifilter ConnectionService, PolicySyncService,
+/// and Listener, and forwards their notifications to UI subscribers via LogReceived.
 /// </summary>
-public class KernelComm : IKernelComm
+public sealed class KernelComm : IKernelComm
 {
-    public event EventHandler<string> LogReceived;
-
     private static readonly ILogger Logger = Log.ForContext<KernelComm>();
 
-    private CancellationTokenSource _cts;
-    private Task _readerTask;
+    // Spec: blacklist.txt is checked for pending updates every 30 seconds.
+    private static readonly TimeSpan BlacklistPollInterval = TimeSpan.FromSeconds(30);
 
-    private readonly PolicySyncService _policySyncService;
+    public event EventHandler<string>? LogReceived;
+
+    private CancellationTokenSource? _readerCts;
+    private Task? _listenerTask;
+    private Task? _bootstrapTask;
+    private Task? _blacklistPollTask;
+
+    private ConnectionService? _connectionService;
+    private PolicySyncService? _policySyncService;
+    private Listener? _listener;
 
     public void Start()
     {
-        _cts = new CancellationTokenSource();
-        _readerTask = Task.Run(() => ReadLoop(_cts.Token));
-        LogReceived?.Invoke(this, "Kernel channel opened.");
+        if (_readerCts is not null) return; // already started
+
+        _readerCts = new CancellationTokenSource();
+        CancellationToken token = _readerCts.Token;
+
+        _connectionService = new ConnectionService();
+        _policySyncService = new PolicySyncService(_connectionService);
+        _listener = new Listener(_connectionService);
+        _listener.MinifilterLogEmitted += OnMinifilterLogEmitted;
+        _listener.UnauthorizedOperationDetected += OnUnauthorizedOperationDetected;
+
+        _bootstrapTask = Task.Run(() => ConnectAndStartListenerAsync(token), token);
+        _blacklistPollTask = Task.Run(() => PollBlacklistAsync(token), token);
+
+        LogReceived?.Invoke(this, "Kernel channel opening...");
     }
 
     public void Stop()
     {
-        _cts?.Cancel();
-        try { _readerTask?.Wait(500); } catch { /* ignore */ }
+        CancellationTokenSource? cts = _readerCts;
+        if (cts is null) return;
+        _readerCts = null;
+
+        try
+        {
+            cts.Cancel();
+
+            Task[] outstanding = new[] { _bootstrapTask, _listenerTask, _blacklistPollTask }
+                .Where(t => t is not null)
+                .Cast<Task>()
+                .ToArray();
+
+            if (outstanding.Length > 0)
+            {
+                try
+                {
+                    Task.WaitAll(outstanding, TimeSpan.FromSeconds(2));
+                }
+                catch (AggregateException)
+                {
+                    // expected on cancel
+                }
+            }
+        }
+        finally
+        {
+            if (_listener is not null)
+            {
+                _listener.MinifilterLogEmitted -= OnMinifilterLogEmitted;
+                _listener.UnauthorizedOperationDetected -= OnUnauthorizedOperationDetected;
+                _listener = null;
+            }
+
+            try
+            {
+                _connectionService?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning(ex, "MINIFILTER: Failed to dispose ConnectionService.");
+            }
+            _connectionService = null;
+            _policySyncService = null;
+
+            cts.Dispose();
+            _bootstrapTask = null;
+            _listenerTask = null;
+            _blacklistPollTask = null;
+        }
+
         LogReceived?.Invoke(this, "Kernel channel closed.");
     }
 
     public bool SendOperation(string path, string operation)
     {
-        var shieldOperationType = operation.Equals("shield", StringComparison.OrdinalIgnoreCase)
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("Path cannot be null, empty, or whitespace.", nameof(path));
+        }
+        if (string.IsNullOrWhiteSpace(operation))
+        {
+            throw new ArgumentException("Operation cannot be null, empty, or whitespace.", nameof(operation));
+        }
+
+        ShieldOperationType shieldOperationType = string.Equals(operation, "shield", StringComparison.OrdinalIgnoreCase)
             ? ShieldOperationType.Shield
             : ShieldOperationType.Unshield;
 
+        // Mark the blacklist file as dirty and update it in the background.
+        // The shutdown path also runs UpdateBlacklistFileAsync as a final flush.
         BlacklistService.MarkBlacklistDirty();
-
         _ = Task.Run(async () =>
         {
             try
             {
-                await BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None);
+                await BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -72,34 +150,127 @@ public class KernelComm : IKernelComm
             }
         });
 
-        _policySyncService.InformDriver(path, shieldOperationType);
+        // Inform the driver. PolicySyncService throws on transport/wiring
+        // problems; translate into a simple bool so the UI can mark "Failed".
+        PolicySyncService? policy = _policySyncService;
+        if (policy is null)
+        {
+            Logger.Warning("MINIFILTER: SendOperation called before Start; ignoring.");
+            LogReceived?.Invoke(this, $"-> kernel SKIPPED (not started): {operation} {path}");
+            return false;
+        }
 
-        // Return whatever your layer says about success.
-        LogReceived?.Invoke(this, $"-> kernel: {operation} {path}");
-        return true;
+        try
+        {
+            policy.InformDriver(path, shieldOperationType);
+            LogReceived?.Invoke(this, $"-> kernel: {operation} {path}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "MINIFILTER: Failed to inform driver. Path: {Path}, Op: {Operation}", path, operation);
+            LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {path} ({ex.Message})");
+            return false;
+        }
     }
 
-    // Demo loop - in your real code this is wherever you already read kernel messages.
-    // If your comm layer already has its own thread / callback, just forward each
-    // received line into LogReceived?.Invoke(this, line);
-    private void ReadLoop(CancellationToken ct)
+    /// <summary>
+    /// Spec lifecycle: SEND port (with encrypted+signed connection context)
+    /// must be opened first, then the RECEIVE port. After both ports are
+    /// connected we start the listener.
+    /// </summary>
+    private async Task ConnectAndStartListenerAsync(CancellationToken token)
     {
-        int i = 0;
-        var rng = new Random();
-        string[] samples =
+        ConnectionService? connection = _connectionService;
+        Listener? listener = _listener;
+        if (connection is null || listener is null) return;
+
+        try
         {
-            "[kernel] heartbeat",
-            "[kernel] shield applied to handle 0x{0:X4}",
-            "[kernel] WARN: queue depth high ({0})",
-            "[kernel] ERROR: failed to open device, code {0}",
-            "[kernel] unshield completed in {0} ms"
+            await connection.ConnectSendMessagePortToKernelAsync(token).ConfigureAwait(false);
+            await connection.ConnectReceiveMessagePortFromKernelAsync(token).ConfigureAwait(false);
+
+            _listenerTask = Task.Run(() => listener.RunAsync(token), token);
+
+            LogReceived?.Invoke(this, "Kernel channel opened.");
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            // shutting down
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "MINIFILTER: Failed to bring up kernel channel.");
+            LogReceived?.Invoke(this, $"Kernel channel ERROR: {ex.Message}");
+        }
+    }
+
+    private async Task PollBlacklistAsync(CancellationToken token)
+    {
+        while (!token.IsCancellationRequested)
+        {
+            try
+            {
+                await Task.Delay(BlacklistPollInterval, token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            try
+            {
+                await BlacklistService.UpdateBlacklistFileAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, "MINIFILTER: Periodic blacklist update failed.");
+            }
+        }
+    }
+
+    private void OnMinifilterLogEmitted(object? sender, PayloadParser.ParsedLogEntry logEntry)
+    {
+        string severity = logEntry.LogType switch
+        {
+            MessageContract.LogType.Failure => "ERROR",
+            MessageContract.LogType.Warning => "WARN",
+            MessageContract.LogType.Info => "INFO",
+            _ => "LOG",
         };
 
-        while (!ct.IsCancellationRequested)
+        LogReceived?.Invoke(this, $"[kernel/{severity}] {logEntry.Message}");
+    }
+
+    /// <summary>
+    /// Spec: when the minifilter reports a blocked operation, the agent
+    /// triggers the unshield flow for that path and notifies the driver so
+    /// the file can be removed from protection.
+    /// </summary>
+    private void OnUnauthorizedOperationDetected(object? sender, MessageContract.UnauthorizedOperationInfo op)
+    {
+        LogReceived?.Invoke(this, $"[kernel] UNAUTHORIZED {op.MinifilterOperationType} on {op.FileName}");
+
+        PolicySyncService? policy = _policySyncService;
+        if (policy is null || string.IsNullOrWhiteSpace(op.FileName))
         {
-            Thread.Sleep(1500);
-            var template = samples[rng.Next(samples.Length)];
-            LogReceived?.Invoke(this, string.Format(template, rng.Next(1, 9999)) + $" #{++i}");
+            return;
+        }
+
+        try
+        {
+            policy.InformDriver(op.FileName, ShieldOperationType.Unshield);
+            BlacklistService.MarkBlacklistDirty();
+            LogReceived?.Invoke(this, $"-> kernel: auto-unshield {op.FileName}");
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "MINIFILTER: Auto-unshield failed for {Path}.", op.FileName);
+            LogReceived?.Invoke(this, $"-> kernel: auto-unshield FAILED {op.FileName} ({ex.Message})");
         }
     }
 }

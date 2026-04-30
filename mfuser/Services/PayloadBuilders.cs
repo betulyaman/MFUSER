@@ -13,6 +13,8 @@
 using System.Buffers.Binary;
 using System.Text;
 
+namespace mfuser.Services;
+
 public static class PayloadBuilders
 {
     public readonly struct PayloadBuildResult
