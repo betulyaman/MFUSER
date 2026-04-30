@@ -6,3 +6,6 @@
 /mfuser/obj
 /.vs/ProjectEvaluation
 /mfuser/bin/Debug/net9.0-windows7.0
+/mfuser/bin/Release/net9.0-windows7.0
+/publish
+/operations.json

@@ -215,29 +215,41 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Calls the kernel comm layer for <paramref name="entry and updates the row's
-    /// status + emits a UI log line. <paramref name="source just tags the log.
+    /// Calls the kernel comm layer for <paramref name="entry"/> and updates the row's
+    /// status + emits a UI log line. <paramref name="source"/> just tags the log.
+    /// Runs the kernel call on a background task so shielding a folder with
+    /// many files (each one is a separate kernel message) doesn't freeze the UI.
     /// </summary>
     private void RunOperationOnEntry(OperationEntry entry, string operation, string source)
     {
-        // Capture the path locally in case the entry is mutated while we wait.
+        // Capture the path locally so the background work is independent of
+        // any later mutations to the entry.
         string path = entry.Path;
 
-        try
+        Task.Run(() =>
         {
-            bool ok = _kernel.SendOperation(path, operation);
+            try
+            {
+                bool ok = _kernel.SendOperation(path, operation);
 
-            entry.Status = ok ? "Sent" : "Failed";
-            AddLog(
-                $"[UI] {source} {operation} {path} -> {entry.Status}",
-                ok ? ColorOk : ColorError,
-                ok ? LogLevel.Info : LogLevel.Error);
-        }
-        catch (Exception ex)
-        {
-            entry.Status = "Error";
-            AddLog($"[UI] {source} exception: {ex.Message}", ColorError, LogLevel.Error);
-        }
+                Dispatcher.Invoke(() =>
+                {
+                    entry.Status = ok ? "Sent" : "Failed";
+                    AddLog(
+                        $"[UI] {source} {operation} {path} -> {entry.Status}",
+                        ok ? ColorOk : ColorError,
+                        ok ? LogLevel.Info : LogLevel.Error);
+                });
+            }
+            catch (Exception ex)
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    entry.Status = "Error";
+                    AddLog($"[UI] {source} exception: {ex.Message}", ColorError, LogLevel.Error);
+                });
+            }
+        });
     }
 
     // Walk up the visual tree to find a parent of a given type.

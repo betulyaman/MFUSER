@@ -53,16 +53,32 @@ public static class JsonReadService
     {
         try
         {
-            if (Directory.Exists(fullPath) || File.Exists(fullPath))
+            if (File.Exists(fullPath))
             {
                 shieldedPaths.Add(fullPath);
+                return;
             }
-            else
+
+            if (Directory.Exists(fullPath))
             {
-                Logger.Information(
-                    "MINIFILTER: Skipping non-existent shielded path: {FullPath}",
-                    fullPath);
+                // Folder submissions expand to: the folder itself + every file
+                // under it. Same expansion KernelComm.SendOperation uses, so
+                // the kernel sees a consistent view at startup vs at submit.
+                int added = 0;
+                foreach (string expandedPath in PathExpander.ExpandToShieldPaths(fullPath))
+                {
+                    if (shieldedPaths.Add(expandedPath)) added++;
+                }
+                Logger.Debug(
+                    "MINIFILTER: Expanded shielded folder {Folder} to {Count} path(s) (folder + files).",
+                    fullPath,
+                    added);
+                return;
             }
+
+            Logger.Information(
+                "MINIFILTER: Skipping non-existent shielded path: {FullPath}",
+                fullPath);
         }
         catch (Exception ex)
         {

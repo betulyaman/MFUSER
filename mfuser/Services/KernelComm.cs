@@ -167,18 +167,57 @@ public sealed class KernelComm : IKernelComm
             return false;
         }
 
-        try
+        // The minifilter matches per-path, so a folder must be expanded:
+        // the folder path itself AND every file under it are sent. For a
+        // single-file submission the result is just the file.
+        bool isDirectory = PathExpander.IsDirectory(path);
+        string[] paths = PathExpander.ExpandToShieldPaths(path).ToArray();
+
+        if (paths.Length == 0)
         {
-            policy.InformDriver(path, shieldOperationType);
-            LogReceived?.Invoke(this, $"-> kernel: {operation} {path}");
-            return true;
-        }
-        catch (Exception ex)
-        {
-            Logger.Error(ex, "MINIFILTER: Failed to inform driver. Path: {Path}, Op: {Operation}", path, operation);
-            LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {path} ({ex.Message})");
+            LogReceived?.Invoke(this, $"-> kernel SKIPPED (no paths to send): {operation} {path}");
             return false;
         }
+
+        int succeeded = 0;
+        int failed = 0;
+
+        foreach (string targetPath in paths)
+        {
+            try
+            {
+                policy.InformDriver(targetPath, shieldOperationType);
+                succeeded++;
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                Logger.Error(ex, "MINIFILTER: InformDriver failed. Path: {Path}, Op: {Operation}", targetPath, operation);
+                // Only surface per-path failures in the UI when running over a
+                // folder, so we don't spam for single-file submissions.
+                if (isDirectory)
+                {
+                    LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {targetPath} ({ex.Message})");
+                }
+            }
+        }
+
+        if (isDirectory)
+        {
+            // paths includes the folder path + N files; call out the file count separately.
+            int fileCount = paths.Length - 1;
+            LogReceived?.Invoke(this, $"-> kernel: {operation} {path} (folder + {fileCount} file(s); {succeeded} ok, {failed} failed)");
+        }
+        else if (failed == 0)
+        {
+            LogReceived?.Invoke(this, $"-> kernel: {operation} {path}");
+        }
+        else
+        {
+            LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {path}");
+        }
+
+        return failed == 0 && succeeded > 0;
     }
 
     /// <summary>
