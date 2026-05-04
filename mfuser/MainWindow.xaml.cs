@@ -57,18 +57,41 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         // ---- Operations list: load any persisted entries ----
-        foreach (OperationEntry op in OperationStore.Load())
+        List<OperationEntry> loaded = OperationStore.Load();
+        foreach (OperationEntry op in loaded)
         {
             Operations.Add(op);
         }
 
         OperationsList.ItemsSource = Operations;
 
+        // Tooltip exposes the resolved JSON path so users can copy it without
+        // digging in source.
+        RefreshOperationsButton.ToolTip = $"Reload operations from disk:\n{OperationStore.FilePath}";
+
         // ---- Logs pane (RichTextBox) ----
         // RichTextBox renders one Paragraph per filtered log entry; the
         // FlowDocument is built from XAML and we just append/remove blocks.
         UpdateFilterButtonStyles();
         UpdateLogCountText();
+
+        // Surface the load result so the user can tell whether persisted
+        // operations were actually picked up (empty file, missing file,
+        // corrupt JSON all return 0 entries from Load()).
+        if (loaded.Count > 0)
+        {
+            AddLog(
+                $"[UI] Loaded {loaded.Count} persisted operation(s) from {OperationStore.FilePath}",
+                ColorOk,
+                LogLevel.Info);
+        }
+        else
+        {
+            AddLog(
+                $"[UI] No persisted operations found at {OperationStore.FilePath} (empty/missing/unreadable)",
+                ColorWarning,
+                LogLevel.Warning);
+        }
 
         // ---- Comm layer ----
         _kernel = new KernelComm();
@@ -278,6 +301,10 @@ public partial class MainWindow : Window
                         $"[UI] {source} {operation} {path} -> {entry.Status}{suffix}",
                         ok ? ColorOk : ColorError,
                         ok ? LogLevel.Info : LogLevel.Error);
+
+                    // Persist immediately so a crash/kill before window-close
+                    // doesn't lose this entry.
+                    OperationStore.Save(Operations);
                 });
             }
             catch (Exception ex)
@@ -286,6 +313,7 @@ public partial class MainWindow : Window
                 {
                     entry.Status = "Error";
                     AddLog($"[UI] {source} exception: {ex.Message}", ColorError, LogLevel.Error);
+                    OperationStore.Save(Operations);
                 });
             }
         });
@@ -435,6 +463,78 @@ public partial class MainWindow : Window
             MessageBoxImage.Question);
 
         if (result == MessageBoxResult.Yes) Operations.Clear();
+    }
+
+    /// <summary>
+    /// Reloads operations from <see cref="OperationStore.FilePath"/>, replacing
+    /// the in-memory list. Useful when the JSON file was edited externally or
+    /// when the user wants to confirm what's currently on disk.
+    /// </summary>
+    private void RefreshOperationsButton_Click(object sender, RoutedEventArgs e)
+    {
+        List<OperationEntry> loaded = OperationStore.Load();
+
+        Operations.Clear();
+        foreach (OperationEntry op in loaded)
+        {
+            Operations.Add(op);
+        }
+
+        AddLog(
+            $"[UI] Reloaded {loaded.Count} entries from {OperationStore.FilePath}",
+            loaded.Count > 0 ? ColorOk : ColorWarning,
+            loaded.Count > 0 ? LogLevel.Info : LogLevel.Warning);
+    }
+
+    /// <summary>
+    /// Pops up a dialog listing every path currently under minifilter
+    /// protection, with shielded folders expanded into their files —
+    /// i.e. exactly what the kernel sees, not just what the user submitted.
+    /// </summary>
+    private void ViewProtectedFilesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            JsonReadService.ReadShieldedPaths(paths);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"Failed to enumerate shielded paths:\n\n{ex.Message}",
+                "Protected files",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return;
+        }
+
+        List<string> sortedPaths = paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+
+        var listBox = new ListBox
+        {
+            ItemsSource = sortedPaths,
+            FontFamily = new FontFamily("Consolas"),
+            FontSize = 12,
+            Background = (Brush)new BrushConverter().ConvertFromString("#1E1E1E")!,
+            Foreground = Brushes.LightGray,
+            BorderThickness = new Thickness(0),
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+        };
+
+        var window = new Window
+        {
+            Title = $"Protected paths ({sortedPaths.Count})",
+            Width = 720,
+            Height = 480,
+            Owner = this,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (Brush)new BrushConverter().ConvertFromString("#252526")!,
+            Content = listBox,
+        };
+
+        window.ShowDialog();
     }
 
     // =================================================================

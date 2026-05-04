@@ -100,6 +100,15 @@
                                 Style="{StaticResource MutedButton}"
                                 DockPanel.Dock="Right"
                                 Click="ClearOperationsButton_Click"/>
+                        <Button x:Name="ViewProtectedFilesButton" Content="Protected files..."
+                                Style="{StaticResource MutedButton}"
+                                DockPanel.Dock="Right" Margin="0,0,6,0"
+                                ToolTip="Show every file currently under minifilter protection (folders expanded)"
+                                Click="ViewProtectedFilesButton_Click"/>
+                        <Button x:Name="RefreshOperationsButton" Content="Refresh"
+                                Style="{StaticResource MutedButton}"
+                                DockPanel.Dock="Right" Margin="0,0,6,0"
+                                Click="RefreshOperationsButton_Click"/>
                         <!-- Hint so users know rows are interactive -->
                         <TextBlock Text="(double-click a row to toggle)"
                                    Foreground="#888888" FontStyle="Italic"
