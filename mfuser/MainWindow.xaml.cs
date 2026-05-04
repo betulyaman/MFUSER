@@ -197,8 +197,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        string operation =
-            (OperationComboBox.SelectedItem as ComboBoxItem)?.Content?.ToString() ?? "shield";
+        // Selection always shields. Unshield is done by double-clicking the
+        // path in a log line.
+        const string operation = "shield";
 
         var entry = new OperationEntry
         {

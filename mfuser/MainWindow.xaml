@@ -156,17 +156,16 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="140"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
-                    <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Text="New Operation"
+                    <!-- Selection always shields. To unshield, double-click
+                         the path in a log line on the right pane. -->
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="Shield a file or folder"
                                Style="{StaticResource HeaderStyle}"/>
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Path"
                                Style="{StaticResource LabelStyle}"/>
-                    <TextBlock Grid.Row="1" Grid.Column="3" Text="Operation"
-                               Style="{StaticResource LabelStyle}" Margin="6,0,0,4"/>
 
                     <TextBox Grid.Row="2" Grid.Column="0" x:Name="PathTextBox"
                              KeyDown="PathTextBox_KeyDown"/>
@@ -180,13 +179,8 @@
                              ToolTip="Pick a folder"
                              Style="{StaticResource MutedButton}"
                              Click="BrowseFolderButton_Click"/>
-                    <ComboBox Grid.Row="2" Grid.Column="3" x:Name="OperationComboBox"
-                              Margin="6,0,0,0">
-                        <ComboBoxItem Content="shield" IsSelected="True"/>
-                        <ComboBoxItem Content="unshield"/>
-                    </ComboBox>
-                    <Button Grid.Row="2" Grid.Column="4" x:Name="SubmitButton"
-                            Content="Submit" Margin="6,0,0,0"
+                    <Button Grid.Row="2" Grid.Column="3" x:Name="SubmitButton"
+                            Content="Shield" Margin="6,0,0,0"
                             Click="SubmitButton_Click"/>
                 </Grid>
             </Border>
