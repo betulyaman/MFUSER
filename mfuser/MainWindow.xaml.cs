@@ -261,13 +261,21 @@ public partial class MainWindow : Window
         {
             try
             {
-                bool ok = _kernel.SendOperation(path, operation);
+                (bool ok, int pathsSucceeded, int pathsFailed) = _kernel.SendOperation(path, operation);
 
                 Dispatcher.Invoke(() =>
                 {
                     entry.Status = ok ? "Sent" : "Failed";
+
+                    int totalPaths = pathsSucceeded + pathsFailed;
+                    string suffix = totalPaths > 1
+                        ? (ok
+                            ? $" ({totalPaths} paths)"
+                            : $" ({pathsSucceeded}/{totalPaths} paths)")
+                        : string.Empty;
+
                     AddLog(
-                        $"[UI] {source} {operation} {path} -> {entry.Status}",
+                        $"[UI] {source} {operation} {path} -> {entry.Status}{suffix}",
                         ok ? ColorOk : ColorError,
                         ok ? LogLevel.Info : LogLevel.Error);
                 });
@@ -311,6 +319,7 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog(this) == true)
         {
             PathTextBox.Text = dlg.FileName;
+            SubmitCurrentInput();
         }
     }
 
@@ -324,6 +333,7 @@ public partial class MainWindow : Window
         if (dlg.ShowDialog(this) == true)
         {
             PathTextBox.Text = dlg.FolderName;
+            SubmitCurrentInput();
         }
     }
 

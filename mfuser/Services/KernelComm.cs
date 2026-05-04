@@ -23,10 +23,17 @@ public interface IKernelComm
     void Stop();
 
     /// <summary>
-    /// Send a (path, operation) pair down to the kernel.
-    /// Returns true if the kernel acknowledged the request.
+    /// Send a (path, operation) pair down to the kernel. Folder paths are
+    /// expanded to (folder + every file under it) and submitted as a single
+    /// batched policy-sync message (or as few messages as the wire size cap
+    /// allows).
     /// </summary>
-    bool SendOperation(string path, string operation);
+    /// <returns>
+    /// <c>success</c>: true iff every path was acknowledged by the driver.
+    /// <c>pathsSucceeded</c>/<c>pathsFailed</c>: how many paths got through vs
+    /// failed. For a single-path submit they're 1/0 or 0/1.
+    /// </returns>
+    (bool success, int pathsSucceeded, int pathsFailed) SendOperation(string path, string operation);
 }
 
 /// <summary>
@@ -127,7 +134,7 @@ public sealed class KernelComm : IKernelComm
         LogReceived?.Invoke(this, "Kernel channel closed.");
     }
 
-    public bool SendOperation(string path, string operation)
+    public (bool success, int pathsSucceeded, int pathsFailed) SendOperation(string path, string operation)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -157,67 +164,38 @@ public sealed class KernelComm : IKernelComm
             }
         });
 
-        // Inform the driver. PolicySyncService throws on transport/wiring
-        // problems; translate into a simple bool so the UI can mark "Failed".
         PolicySyncService? policy = _policySyncService;
         if (policy is null)
         {
             Logger.Warning("MINIFILTER: SendOperation called before Start; ignoring.");
-            LogReceived?.Invoke(this, $"-> kernel SKIPPED (not started): {operation} {path}");
-            return false;
+            return (false, 0, 0);
         }
 
         // The minifilter matches per-path, so a folder must be expanded:
         // the folder path itself AND every file under it are sent. For a
-        // single-file submission the result is just the file.
-        bool isDirectory = PathExpander.IsDirectory(path);
+        // single-file submission the list contains just the file.
         string[] paths = PathExpander.ExpandToShieldPaths(path).ToArray();
 
         if (paths.Length == 0)
         {
-            LogReceived?.Invoke(this, $"-> kernel SKIPPED (no paths to send): {operation} {path}");
-            return false;
+            Logger.Information("MINIFILTER: No paths to send for {Path}; ignoring.", path);
+            return (false, 0, 0);
         }
 
-        int succeeded = 0;
-        int failed = 0;
-
-        foreach (string targetPath in paths)
+        // Single batched policy-sync call. PolicySyncService chunks internally
+        // when the cumulative payload would exceed the per-message wire cap;
+        // each chunk is one encrypted+signed message. A throw means the entire
+        // batch (all `paths.Length` paths) failed.
+        try
         {
-            try
-            {
-                policy.InformDriver(targetPath, shieldOperationType);
-                succeeded++;
-            }
-            catch (Exception ex)
-            {
-                failed++;
-                Logger.Error(ex, "MINIFILTER: InformDriver failed. Path: {Path}, Op: {Operation}", targetPath, operation);
-                // Only surface per-path failures in the UI when running over a
-                // folder, so we don't spam for single-file submissions.
-                if (isDirectory)
-                {
-                    LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {targetPath} ({ex.Message})");
-                }
-            }
+            policy.InformDriver(paths, shieldOperationType);
+            return (true, paths.Length, 0);
         }
-
-        if (isDirectory)
+        catch (Exception ex)
         {
-            // paths includes the folder path + N files; call out the file count separately.
-            int fileCount = paths.Length - 1;
-            LogReceived?.Invoke(this, $"-> kernel: {operation} {path} (folder + {fileCount} file(s); {succeeded} ok, {failed} failed)");
+            Logger.Error(ex, "MINIFILTER: InformDriver failed. Path: {Path}, Op: {Operation}", path, operation);
+            return (false, 0, paths.Length);
         }
-        else if (failed == 0)
-        {
-            LogReceived?.Invoke(this, $"-> kernel: {operation} {path}");
-        }
-        else
-        {
-            LogReceived?.Invoke(this, $"-> kernel FAILED: {operation} {path}");
-        }
-
-        return failed == 0 && succeeded > 0;
     }
 
     /// <summary>

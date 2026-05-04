@@ -1,4 +1,4 @@
-﻿using Serilog;
+using Serilog;
 using System.Text;
 
 namespace mfuser.Services;
@@ -22,44 +22,56 @@ public sealed class PolicySyncService
         _connectionService = connectionService ?? throw new ArgumentNullException(nameof(connectionService));
     }
 
-    public void InformDriver(string path, ShieldOperationType operation)
+    /// <summary>
+    /// Sends one or more paths to the minifilter as a single encrypted+signed
+    /// policy-sync message. All paths share the same <paramref name="operation"/>.
+    /// For a single-path submit, just pass a one-element list.
+    /// </summary>
+    public void InformDriver(IReadOnlyList<string> paths, ShieldOperationType operation)
     {
-        if (string.IsNullOrWhiteSpace(path))
+        if (paths is null) throw new ArgumentNullException(nameof(paths));
+        if (paths.Count == 0) return;
+
+        (MessageContract.PolicySyncStatus status, MessageContract.AccessPolicy access) =
+            MapOperation(operation);
+
+        // Build & validate every entry up front; any per-path validation
+        // failure aborts the whole call before any message is sent.
+        var entries = new List<PayloadBuilders.PolicySyncPayloadEntry>(paths.Count);
+        foreach (string path in paths)
         {
-            throw new ArgumentException("Path cannot be null, empty, or whitespace.", nameof(path));
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new ArgumentException("Path collection contains a null/empty path.", nameof(paths));
+            }
+
+            entries.Add(BuildPolicySyncPayloadEntry(status, access, path));
         }
 
-        MessageContract.PolicySyncStatus policySyncStatus;
-        MessageContract.AccessPolicy allowedAccessPolicy;
+        var payloadBuildResult = PayloadBuilders.BuildPolicySyncPayload(entries);
 
-        switch (operation)
-        {
-            case ShieldOperationType.Shield:
-                policySyncStatus = MessageContract.PolicySyncStatus.Add;
-                allowedAccessPolicy = MessageContract.AccessPolicy.AllButDelete;
+        byte[] inputContainer = MessageBuilders.BuildMessage(
+            MessageContract.PayloadType.PolicySync,
+            payloadBuildResult.Payload.Span,
+            payloadBuildResult.ItemCount,
+            MessageBuilders.MessageProtection.EncryptedSigned);
 
-                break;
-
-            case ShieldOperationType.Unshield:
-                policySyncStatus = MessageContract.PolicySyncStatus.Remove;
-                allowedAccessPolicy = MessageContract.AccessPolicy.AllAccess;
-
-                break;
-
-            default:
-                throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported driver inform operation.");
-        }
-
-        PayloadBuilders.PolicySyncPayloadEntry payloadEntry =
-            BuildPolicySyncPayloadEntry(policySyncStatus, allowedAccessPolicy, path);
-
-        SendSinglePolicySyncEntry(payloadEntry);
+        _connectionService.SendMessageToKernelOrThrow(inputContainer);
 
         Logger.Information(
-            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Path: {Path}",
+            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Paths: {Count}",
             operation,
-            path);
+            paths.Count);
     }
+
+    private static (MessageContract.PolicySyncStatus status, MessageContract.AccessPolicy access) MapOperation(
+        ShieldOperationType operation) =>
+        operation switch
+        {
+            ShieldOperationType.Shield   => (MessageContract.PolicySyncStatus.Add, MessageContract.AccessPolicy.AllButDelete),
+            ShieldOperationType.Unshield => (MessageContract.PolicySyncStatus.Remove, MessageContract.AccessPolicy.AllAccess),
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported driver inform operation."),
+        };
 
     private static PayloadBuilders.PolicySyncPayloadEntry BuildPolicySyncPayloadEntry(
         MessageContract.PolicySyncStatus policySyncStatus,
@@ -102,23 +114,5 @@ public sealed class PolicySyncService
             policySyncStatus,
             (uint)allowedAccessPolicy,
             ntPathLowercase);
-    }
-
-    private void SendSinglePolicySyncEntry(PayloadBuilders.PolicySyncPayloadEntry payloadEntry)
-    {
-        var payloadEntries = new List<PayloadBuilders.PolicySyncPayloadEntry>(1)
-        {
-            payloadEntry
-        };
-
-        var payloadBuildResult = PayloadBuilders.BuildPolicySyncPayload(payloadEntries);
-
-        byte[] inputContainer = MessageBuilders.BuildMessage(
-            MessageContract.PayloadType.PolicySync,
-            payloadBuildResult.Payload.Span,
-            payloadBuildResult.ItemCount,
-            MessageBuilders.MessageProtection.EncryptedSigned);
-
-        _connectionService.SendMessageToKernelOrThrow(inputContainer);
     }
 }
