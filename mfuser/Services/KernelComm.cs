@@ -149,20 +149,6 @@ public sealed class KernelComm : IKernelComm
             ? ShieldOperationType.Shield
             : ShieldOperationType.Unshield;
 
-        // Mark the blacklist file as dirty and update it in the background.
-        // The shutdown path also runs UpdateBlacklistFileAsync as a final flush.
-        BlacklistService.MarkBlacklistDirty();
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).ConfigureAwait(false);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error(ex, "MINIFILTER: Background blacklist update failed.");
-            }
-        });
 
         PolicySyncService? policy = _policySyncService;
         if (policy is null)

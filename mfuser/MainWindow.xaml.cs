@@ -306,6 +306,44 @@ public partial class MainWindow : Window
                     // Persist immediately so a crash/kill before window-close
                     // doesn't lose this entry.
                     OperationStore.Save(Operations);
+
+                    // Trigger the encrypted+signed blacklist.txt update AFTER
+                    // operations.json is on disk, so JsonReadService doesn't
+                    // race the save. Surface the outcome so a permission/IO
+                    // failure is visible in the log pane.
+                    BlacklistService.MarkBlacklistDirty();
+                    _ = Task.Run(async () =>
+                    {
+                        bool wrote = false;
+                        Exception? error = null;
+                        try
+                        {
+                            wrote = await BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            error = ex;
+                        }
+
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (error is not null)
+                            {
+                                AddLog($"[UI] blacklist.txt update FAILED: {error.Message}", ColorError, LogLevel.Error);
+                            }
+                            else if (wrote)
+                            {
+                                AddLog("[UI] blacklist.txt updated", ColorOk, LogLevel.Info);
+                            }
+                            else
+                            {
+                                // The dirty flag was already cleared by an
+                                // earlier writer, or the file was clean. Not
+                                // an error.
+                                AddLog("[UI] blacklist.txt update skipped (no pending changes or already written)", ColorMuted, LogLevel.Info);
+                            }
+                        });
+                    });
                 });
             }
             catch (Exception ex)
