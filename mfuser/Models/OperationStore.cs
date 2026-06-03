@@ -1,3 +1,4 @@
+using mfuser.Services;
 using Serilog;
 using System.IO;
 using System.Text.Json;
@@ -49,6 +50,12 @@ public static class OperationStore
 
             string json = JsonSerializer.Serialize(operations, SerializerOptions);
             File.WriteAllText(FilePath, json);
+
+            // Any change to operations.json invalidates the on-disk policy
+            // snapshot. Centralizing the dirty mark here removes the need for
+            // every caller to remember (the close-time flush in MainWindow
+            // forgot before this was centralized).
+            PolicySnapshotService.MarkDirty();
         }
         catch (Exception ex)
         {

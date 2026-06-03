@@ -75,9 +75,33 @@ public static class PayloadBuilders
         public uint AccessRightTrusted { get; }
     }
 
-    public readonly struct BlacklistPayloadEntry
+    /// <summary>
+    /// A single TRUSTED_PROCESS_SYNC entry. Trustedness is set membership
+    /// (not bitmask-valued), so no access-rights fields here. Status reuses
+    /// the POLICY_STATUS_* enum (Add / Remove).
+    /// </summary>
+    public readonly struct TrustedProcessSyncPayloadEntry
     {
-        public BlacklistPayloadEntry(
+        public TrustedProcessSyncPayloadEntry(
+            MessageContract.PolicySyncStatus status,
+            string nativeNtPathLowercase)
+        {
+            Status = status;
+            NativeNtPathLowercase = nativeNtPathLowercase ?? throw new ArgumentNullException(nameof(nativeNtPathLowercase));
+        }
+
+        public MessageContract.PolicySyncStatus Status { get; }
+        public string NativeNtPathLowercase { get; }
+    }
+
+    /// <summary>
+    /// A single policy-snapshot entry. Carried on the wire as
+    /// PAYLOAD_TYPE_POLICY_SNAPSHOT (byte value 5). Represents one row of the
+    /// policy ART snapshot the kernel reads from policy_snapshot.bin at boot.
+    /// </summary>
+    public readonly struct PolicySnapshotPayloadEntry
+    {
+        public PolicySnapshotPayloadEntry(
             string dosPath,
             uint accessRightUntrusted,
             uint accessRightTrusted)
@@ -122,7 +146,8 @@ public static class PayloadBuilders
     }
 
     /// <summary>
-    /// Builds BLACKLIST payload bytes.
+    /// Builds policy-snapshot payload bytes (PAYLOAD_TYPE_POLICY_SNAPSHOT on
+    /// the wire).
     ///
     /// Binary layout (little-endian), repeated item count times:
     ///   [access_right_untrusted: UInt32]
@@ -130,7 +155,8 @@ public static class PayloadBuilders
     ///   [path_length_bytes: UInt32]              // UTF-8 bytes INCLUDING NUL terminator
     ///   [path_bytes: byte[path_length_bytes]]    // UTF-8 lower-case NT path INCLUDING trailing '\0'
     /// </summary>
-    public static PayloadBuildResult BlacklistPayloadBuilder(IReadOnlyCollection<BlacklistPayloadEntry> entries)
+    public static PayloadBuildResult BuildPolicySnapshotPayload(
+        IReadOnlyCollection<PolicySnapshotPayloadEntry> entries)
     {
         if (entries is null)
         {
@@ -146,19 +172,19 @@ public static class PayloadBuilders
         int totalPayloadLengthBytes = 0;
         int index = 0;
 
-        foreach (BlacklistPayloadEntry entry in entries)
+        foreach (PolicySnapshotPayloadEntry entry in entries)
         {
             if (string.IsNullOrWhiteSpace(entry.DosPath))
             {
                 throw new ArgumentException(
-                    $"Blacklist entry collection contains a null/empty path at index {index}.",
+                    $"Policy snapshot entry collection contains a null/empty path at index {index}.",
                     nameof(entries));
             }
 
             if (entry.DosPath.IndexOf('\0') >= 0)
             {
                 throw new ArgumentException(
-                    $"Blacklist DOS path contains embedded NUL at index {index}.",
+                    $"Policy snapshot DOS path contains embedded NUL at index {index}.",
                     nameof(entries));
             }
 
@@ -168,7 +194,7 @@ public static class PayloadBuilders
             if (string.IsNullOrWhiteSpace(ntPath))
             {
                 throw new InvalidOperationException(
-                    $"Blacklist DOS->NT translation failed at index {index}: '{entry.DosPath}'.");
+                    $"Policy snapshot DOS->NT translation failed at index {index}: '{entry.DosPath}'.");
             }
 
             int pathUtf8ByteCount = Encoding.UTF8.GetByteCount(ntPath);
@@ -177,7 +203,7 @@ public static class PayloadBuilders
             {
                 throw new ArgumentOutOfRangeException(
                     nameof(entries),
-                    $"Blacklist path is too long to encode with UInt32 length including NUL (index {index}).");
+                    $"Policy snapshot path is too long to encode with UInt32 length including NUL (index {index}).");
             }
 
             nativeNtPathsLowercase[index] = ntPath;
@@ -287,6 +313,78 @@ public static class PayloadBuilders
             WriteUInt32LittleEndian(payload, ref offset, pathLengthBytesIncludingNullTerminator);
             // [path_bytes (without terminator)]
             WriteUtf8StringBytesWithoutTerminator(payload, ref offset, policyEntry.NativeNtPathLowercase, pathUtf8ByteCount);
+            // [NUL terminator]
+            WriteByte(payload, ref offset, 0);
+        }
+
+        return new PayloadBuildResult(payload, itemCount: checked((uint)count));
+    }
+
+    /// <summary>
+    /// Builds TRUSTED_PROCESS_SYNC payload bytes.
+    ///
+    /// Binary layout (little-endian), repeated item count times:
+    ///   [status: UInt8]                          // PolicySyncStatus
+    ///   [path_length_bytes: UInt32]              // UTF-8 bytes INCLUDING NUL
+    ///   [path_bytes: byte[path_length_bytes]]    // UTF-8 lower-case NT image path INCLUDING trailing '\0'
+    /// </summary>
+    public static PayloadBuildResult BuildTrustedProcessSyncPayload(
+        IReadOnlyList<TrustedProcessSyncPayloadEntry> entries)
+    {
+        if (entries is null)
+        {
+            throw new ArgumentNullException(nameof(entries));
+        }
+
+        int count = entries.Count;
+        int[] pathUtf8ByteCounts = new int[count];
+        int totalPayloadLengthBytes = 0;
+
+        for (int index = 0; index < count; index++)
+        {
+            TrustedProcessSyncPayloadEntry entry = entries[index];
+
+            if (string.IsNullOrWhiteSpace(entry.NativeNtPathLowercase))
+            {
+                throw new ArgumentException(
+                    "Trusted-process entries collection contains a null/empty path.",
+                    nameof(entries));
+            }
+
+            if (entry.NativeNtPathLowercase.IndexOf('\0') >= 0)
+            {
+                throw new ArgumentException(
+                    "Trusted-process entry path contains embedded NUL.",
+                    nameof(entries));
+            }
+
+            int pathUtf8ByteCount = Encoding.UTF8.GetByteCount(entry.NativeNtPathLowercase);
+            pathUtf8ByteCounts[index] = pathUtf8ByteCount;
+
+            checked
+            {
+                totalPayloadLengthBytes += sizeof(byte);     // status
+                totalPayloadLengthBytes += sizeof(uint);     // path_length_bytes
+                totalPayloadLengthBytes += pathUtf8ByteCount; // path bytes
+                totalPayloadLengthBytes += 1;                 // NUL
+            }
+        }
+
+        var payload = new byte[totalPayloadLengthBytes];
+        int offset = 0;
+
+        for (int index = 0; index < count; index++)
+        {
+            TrustedProcessSyncPayloadEntry entry = entries[index];
+            int pathUtf8ByteCount = pathUtf8ByteCounts[index];
+
+            // [status: UInt8]
+            WriteByte(payload, ref offset, (byte)entry.Status);
+            // [path_length_bytes: UInt32]
+            uint pathLengthBytesIncludingNullTerminator = checked((uint)pathUtf8ByteCount + 1u);
+            WriteUInt32LittleEndian(payload, ref offset, pathLengthBytesIncludingNullTerminator);
+            // [path_bytes (without terminator)]
+            WriteUtf8StringBytesWithoutTerminator(payload, ref offset, entry.NativeNtPathLowercase, pathUtf8ByteCount);
             // [NUL terminator]
             WriteByte(payload, ref offset, 0);
         }

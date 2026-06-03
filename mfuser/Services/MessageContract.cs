@@ -53,7 +53,8 @@ public static class MessageContract
         PolicySync = 2,
         UnauthorizedFileOperation = 3,
         Log = 4,
-        Blacklist = 5
+        PolicySnapshot = 5,
+        TrustedProcessSync = 6,
     }
 
     // kernel: typedef UINT8 POLICY_SYNC_STATUS;
@@ -118,12 +119,18 @@ public static class MessageContract
           [access_right_untrusted: UINT32]
           [access_right_trusted: UINT32]
 
-      BLACKLIST payload_bytes layout:
+      PayloadType.PolicySnapshot payload_bytes layout:
         repeated header.item_count times:
           [access_right_untrusted: UINT32]
           [access_right_trusted: UINT32]
           [path_length_bytes: UINT32]           // UTF-8 bytes INCLUDING NUL
           [path_bytes: UCHAR[path_length_bytes]]
+
+      TRUSTED_PROCESS_SYNC payload_bytes layout:
+        repeated header.item_count times:
+          [status: UINT8]                       // POLICY_STATUS_ADD or _REMOVE
+          [path_length_bytes: UINT32]           // UTF-8 bytes INCLUDING NUL
+          [path_bytes: UCHAR[path_length_bytes]]// lowercase NT image path
     */
 
 

@@ -34,6 +34,13 @@ public interface IKernelComm
     /// failed. For a single-path submit they're 1/0 or 0/1.
     /// </returns>
     (bool success, int pathsSucceeded, int pathsFailed) SendOperation(string path, string operation);
+
+    /// <summary>
+    /// Add or remove a trusted-process image path. The kernel grants the
+    /// trusted half of a file's access-right bitmask to callers whose image
+    /// path matches an entry here.
+    /// </summary>
+    Task<bool> SendTrustedProcessOperationAsync(string imagePath, TrustedProcessOperation operation, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -44,8 +51,9 @@ public sealed class KernelComm : IKernelComm
 {
     private static readonly ILogger Logger = Log.ForContext<KernelComm>();
 
-    // Spec: blacklist.txt is checked for pending updates every 30 seconds.
-    private static readonly TimeSpan BlacklistPollInterval = TimeSpan.FromSeconds(30);
+    // Spec: kernel-boot snapshot files are checked for pending updates every
+    // 30 seconds (policy_snapshot.bin and trusted_processes_snapshot.bin).
+    private static readonly TimeSpan SnapshotPollInterval = TimeSpan.FromSeconds(30);
 
     public event EventHandler<string>? LogReceived;
     public event EventHandler<MessageContract.UnauthorizedOperationInfo>? UnauthorizedOperationDetected;
@@ -53,10 +61,11 @@ public sealed class KernelComm : IKernelComm
     private CancellationTokenSource? _readerCts;
     private Task? _listenerTask;
     private Task? _bootstrapTask;
-    private Task? _blacklistPollTask;
+    private Task? _snapshotPollTask;
 
     private ConnectionService? _connectionService;
     private PolicySyncService? _policySyncService;
+    private TrustedProcessService? _trustedProcessService;
     private Listener? _listener;
 
     public void Start()
@@ -68,12 +77,13 @@ public sealed class KernelComm : IKernelComm
 
         _connectionService = new ConnectionService();
         _policySyncService = new PolicySyncService(_connectionService);
+        _trustedProcessService = new TrustedProcessService(_connectionService);
         _listener = new Listener(_connectionService);
         _listener.MinifilterLogEmitted += OnMinifilterLogEmitted;
         _listener.UnauthorizedOperationDetected += OnUnauthorizedOperationDetected;
 
         _bootstrapTask = Task.Run(() => ConnectAndStartListenerAsync(token), token);
-        _blacklistPollTask = Task.Run(() => PollBlacklistAsync(token), token);
+        _snapshotPollTask = Task.Run(() => PollKernelBootSnapshotsAsync(token), token);
 
         LogReceived?.Invoke(this, "Kernel channel opening...");
     }
@@ -88,7 +98,7 @@ public sealed class KernelComm : IKernelComm
         {
             cts.Cancel();
 
-            Task[] outstanding = new[] { _bootstrapTask, _listenerTask, _blacklistPollTask }
+            Task[] outstanding = new[] { _bootstrapTask, _listenerTask, _snapshotPollTask }
                 .Where(t => t is not null)
                 .Cast<Task>()
                 .ToArray();
@@ -124,11 +134,12 @@ public sealed class KernelComm : IKernelComm
             }
             _connectionService = null;
             _policySyncService = null;
+            _trustedProcessService = null;
 
             cts.Dispose();
             _bootstrapTask = null;
             _listenerTask = null;
-            _blacklistPollTask = null;
+            _snapshotPollTask = null;
         }
 
         LogReceived?.Invoke(this, "Kernel channel closed.");
@@ -184,6 +195,34 @@ public sealed class KernelComm : IKernelComm
         }
     }
 
+    public async Task<bool> SendTrustedProcessOperationAsync(
+        string imagePath,
+        TrustedProcessOperation operation,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            throw new ArgumentException("Image path cannot be null or empty.", nameof(imagePath));
+        }
+
+        TrustedProcessService? service = _trustedProcessService;
+        if (service is null)
+        {
+            Logger.Warning("MINIFILTER: SendTrustedProcessOperationAsync called before Start; ignoring.");
+            return false;
+        }
+
+        try
+        {
+            return await service.SendAsync(imagePath, operation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error(ex, "MINIFILTER: Trusted-process send failed. Image: {ImagePath}, Op: {Operation}", imagePath, operation);
+            return false;
+        }
+    }
+
     /// <summary>
     /// Spec lifecycle: SEND port (with encrypted+signed connection context)
     /// must be opened first, then the RECEIVE port. After both ports are
@@ -200,6 +239,23 @@ public sealed class KernelComm : IKernelComm
             await connection.ConnectSendMessagePortToKernelAsync(token).ConfigureAwait(false);
             await connection.ConnectReceiveMessagePortFromKernelAsync(token).ConfigureAwait(false);
 
+            TrustedProcessService? trustedProcesses = _trustedProcessService;
+            if (trustedProcesses is not null)
+            {
+                try
+                {
+                    await trustedProcesses.ReplayAllAsync(token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error(ex, "MINIFILTER: Trusted-process replay failed at startup.");
+                }
+            }
+
             _listenerTask = Task.Run(() => listener.RunAsync(token), token);
 
             LogReceived?.Invoke(this, "Kernel channel opened.");
@@ -215,13 +271,13 @@ public sealed class KernelComm : IKernelComm
         }
     }
 
-    private async Task PollBlacklistAsync(CancellationToken token)
+    private async Task PollKernelBootSnapshotsAsync(CancellationToken token)
     {
         while (!token.IsCancellationRequested)
         {
             try
             {
-                await Task.Delay(BlacklistPollInterval, token).ConfigureAwait(false);
+                await Task.Delay(SnapshotPollInterval, token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -230,7 +286,7 @@ public sealed class KernelComm : IKernelComm
 
             try
             {
-                await BlacklistService.UpdateBlacklistFileAsync(token).ConfigureAwait(false);
+                await PolicySnapshotService.UpdateAsync(token).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested)
             {
@@ -238,7 +294,23 @@ public sealed class KernelComm : IKernelComm
             }
             catch (Exception ex)
             {
-                Logger.Error(ex, "MINIFILTER: Periodic blacklist update failed.");
+                Logger.Error(ex, "MINIFILTER: Periodic policy_snapshot.bin update failed.");
+            }
+
+            // Same cadence for the trusted-process snapshot. Independent
+            // dirty flag, independent semaphore, so a failure here can't
+            // starve the policy snapshot and vice versa.
+            try
+            {
+                await TrustedProcessSnapshotService.UpdateAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(ex, "MINIFILTER: Periodic trusted_processes_snapshot.bin update failed.");
             }
         }
     }

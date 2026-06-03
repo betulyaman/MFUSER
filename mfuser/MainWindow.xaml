@@ -105,6 +105,11 @@
                                 DockPanel.Dock="Right" Margin="0,0,6,0"
                                 ToolTip="Show every file currently under minifilter protection (folders expanded)"
                                 Click="ViewProtectedFilesButton_Click"/>
+                        <Button x:Name="TrustedProcessesButton" Content="Trusted processes..."
+                                Style="{StaticResource MutedButton}"
+                                DockPanel.Dock="Right" Margin="0,0,6,0"
+                                ToolTip="Manage the list of trusted image paths (kernel grants them the upper bitmask half)"
+                                Click="TrustedProcessesButton_Click"/>
                         <Button x:Name="RefreshOperationsButton" Content="Refresh"
                                 Style="{StaticResource MutedButton}"
                                 DockPanel.Dock="Right" Margin="0,0,6,0"

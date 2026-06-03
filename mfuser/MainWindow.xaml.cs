@@ -304,21 +304,21 @@ public partial class MainWindow : Window
                         ok ? LogLevel.Info : LogLevel.Error);
 
                     // Persist immediately so a crash/kill before window-close
-                    // doesn't lose this entry.
+                    // doesn't lose this entry. OperationStore.Save marks the
+                    // policy snapshot dirty internally; no separate call needed.
                     OperationStore.Save(Operations);
 
-                    // Trigger the encrypted+signed blacklist.txt update AFTER
-                    // operations.json is on disk, so JsonReadService doesn't
-                    // race the save. Surface the outcome so a permission/IO
-                    // failure is visible in the log pane.
-                    BlacklistService.MarkBlacklistDirty();
+                    // Trigger the encrypted+signed policy_snapshot.bin update
+                    // AFTER operations.json is on disk, so JsonReadService
+                    // doesn't race the save. Surface the outcome so a
+                    // permission/IO failure is visible in the log pane.
                     _ = Task.Run(async () =>
                     {
                         bool wrote = false;
                         Exception? error = null;
                         try
                         {
-                            wrote = await BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).ConfigureAwait(false);
+                            wrote = await PolicySnapshotService.UpdateAsync(CancellationToken.None).ConfigureAwait(false);
                         }
                         catch (Exception ex)
                         {
@@ -329,18 +329,18 @@ public partial class MainWindow : Window
                         {
                             if (error is not null)
                             {
-                                AddLog($"[UI] blacklist.txt update FAILED: {error.Message}", ColorError, LogLevel.Error);
+                                AddLog($"[UI] policy_snapshot.bin update FAILED: {error.Message}", ColorError, LogLevel.Error);
                             }
                             else if (wrote)
                             {
-                                AddLog("[UI] blacklist.txt updated", ColorOk, LogLevel.Info);
+                                AddLog("[UI] policy_snapshot.bin updated", ColorOk, LogLevel.Info);
                             }
                             else
                             {
                                 // The dirty flag was already cleared by an
                                 // earlier writer, or the file was clean. Not
                                 // an error.
-                                AddLog("[UI] blacklist.txt update skipped (no pending changes or already written)", ColorMuted, LogLevel.Info);
+                                AddLog("[UI] policy_snapshot.bin update skipped (no pending changes or already written)", ColorMuted, LogLevel.Info);
                             }
                         });
                     });
@@ -526,6 +526,20 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Opens the modal Trusted Processes management dialog. The dialog runs
+    /// against the same KernelComm channel so adds/removes are routed through
+    /// the existing encrypted+signed send port.
+    /// </summary>
+    private void TrustedProcessesButton_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new TrustedProcessesWindow(_kernel)
+        {
+            Owner = this,
+        };
+        dlg.ShowDialog();
+    }
+
+    /// <summary>
     /// Pops up a dialog listing every path currently under minifilter
     /// protection, with shielded folders expanded into their files —
     /// i.e. exactly what the kernel sees, not just what the user submitted.
@@ -647,7 +661,7 @@ public partial class MainWindow : Window
         try
         {
             OperationStore.Save(Operations);
-            BlacklistService.UpdateBlacklistFileAsync(CancellationToken.None).GetAwaiter().GetResult();
+            PolicySnapshotService.UpdateAsync(CancellationToken.None).GetAwaiter().GetResult();
         }
         catch (Exception ex)
         {

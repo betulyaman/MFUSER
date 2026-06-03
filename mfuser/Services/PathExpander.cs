@@ -10,7 +10,7 @@ namespace mfuser.Services;
 ///     underneath it (recursive).
 /// The same expansion is used at submit time (KernelComm.SendOperation) and
 /// when reading <c>operations.json</c> for the connection-context payload and
-/// <c>blacklist.txt</c>, so the kernel always sees the same set of paths.
+/// <c>policy_snapshot.bin</c>, so the kernel always sees the same set of paths.
 /// </summary>
 public static class PathExpander
 {
