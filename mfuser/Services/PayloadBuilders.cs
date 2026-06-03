@@ -1,4 +1,4 @@
-﻿// Shared payload builders for messages exchanged between user-mode Agent and kernel-mode minifilter.
+// Shared payload builders for messages exchanged between user-mode Agent and kernel-mode minifilter.
 //
 // IMPORTANT:
 // - Payloads are strict binary layouts. Do not add extra bytes, padding, or trailing data.
@@ -9,6 +9,15 @@
 //   - UTF-8 encoded,
 //   - NUL-terminated,
 //   - and length fields MUST include the NUL terminator.
+//
+// PER-ENTRY ACCESS RIGHTS:
+// Each shielded entry on the wire carries TWO bitmasks: one for untrusted
+// callers (everyone except the agent and trusted-process matches) and one
+// for trusted callers (binaries whose image path the agent has Authenticode-
+// verified and pushed to the kernel via TRUSTED_PROCESS_SYNC). The kernel
+// packs the pair into a single UINT32 internally; on the wire each half is
+// written as its own little-endian UINT32 in the order
+// (untrusted, then trusted).
 
 using System.Buffers.Binary;
 using System.Text;
@@ -31,28 +40,56 @@ public static class PayloadBuilders
 
     public readonly struct PolicySyncPayloadEntry
     {
-        public PolicySyncPayloadEntry(MessageContract.PolicySyncStatus status, uint accessMask, string nativeNtPathLowercase)
+        public PolicySyncPayloadEntry(
+            MessageContract.PolicySyncStatus status,
+            uint accessRightUntrusted,
+            uint accessRightTrusted,
+            string nativeNtPathLowercase)
         {
             Status = status;
-            AccessMask = accessMask;
+            AccessRightUntrusted = accessRightUntrusted;
+            AccessRightTrusted = accessRightTrusted;
             NativeNtPathLowercase = nativeNtPathLowercase ?? throw new ArgumentNullException(nameof(nativeNtPathLowercase));
         }
 
         public MessageContract.PolicySyncStatus Status { get; }
-        public uint AccessMask { get; }
+        public uint AccessRightUntrusted { get; }
+        public uint AccessRightTrusted { get; }
         public string NativeNtPathLowercase { get; }
     }
 
     public readonly struct ConnectionContextPathAccessEntry
     {
-        public ConnectionContextPathAccessEntry(string nativeNtPathLowercase, uint accessRights)
+        public ConnectionContextPathAccessEntry(
+            string nativeNtPathLowercase,
+            uint accessRightUntrusted,
+            uint accessRightTrusted)
         {
             NativeNtPathLowercase = nativeNtPathLowercase ?? throw new ArgumentNullException(nameof(nativeNtPathLowercase));
-            AccessRights = accessRights;
+            AccessRightUntrusted = accessRightUntrusted;
+            AccessRightTrusted = accessRightTrusted;
         }
 
         public string NativeNtPathLowercase { get; }
-        public uint AccessRights { get; }
+        public uint AccessRightUntrusted { get; }
+        public uint AccessRightTrusted { get; }
+    }
+
+    public readonly struct BlacklistPayloadEntry
+    {
+        public BlacklistPayloadEntry(
+            string dosPath,
+            uint accessRightUntrusted,
+            uint accessRightTrusted)
+        {
+            DosPath = dosPath ?? throw new ArgumentNullException(nameof(dosPath));
+            AccessRightUntrusted = accessRightUntrusted;
+            AccessRightTrusted = accessRightTrusted;
+        }
+
+        public string DosPath { get; }
+        public uint AccessRightUntrusted { get; }
+        public uint AccessRightTrusted { get; }
     }
 
     private static void WriteUInt32LittleEndian(byte[] destination, ref int offset, uint value)
@@ -87,72 +124,76 @@ public static class PayloadBuilders
     /// <summary>
     /// Builds BLACKLIST payload bytes.
     ///
-    /// Binary layout, repeated item count times:
+    /// Binary layout (little-endian), repeated item count times:
+    ///   [access_right_untrusted: UInt32]
+    ///   [access_right_trusted: UInt32]
     ///   [path_length_bytes: UInt32]              // UTF-8 bytes INCLUDING NUL terminator
-    ///   [path_bytes: byte[path_length_bytes]]   // UTF-8 lower-case native Windows NT path INCLUDING trailing '\0'
-    ///
-    /// Guarantees:
-    /// - NT path (converts DOS -> NT when needed)
-    /// - lower-case
-    /// - trailing NUL in payload
-    /// - itemCount == number of paths written (kernel parse safe)
+    ///   [path_bytes: byte[path_length_bytes]]    // UTF-8 lower-case NT path INCLUDING trailing '\0'
     /// </summary>
-    public static PayloadBuildResult BlacklistPayloadBuilder(IReadOnlyCollection<string> dosPaths)
+    public static PayloadBuildResult BlacklistPayloadBuilder(IReadOnlyCollection<BlacklistPayloadEntry> entries)
     {
-        if (dosPaths is null)
+        if (entries is null)
         {
-            throw new ArgumentNullException(nameof(dosPaths));
+            throw new ArgumentNullException(nameof(entries));
         }
 
-        int count = dosPaths.Count;
+        int count = entries.Count;
         string[] nativeNtPathsLowercase = new string[count];
         int[] pathUtf8ByteCounts = new int[count];
+        uint[] untrustedRights = new uint[count];
+        uint[] trustedRights = new uint[count];
 
-        uint writtenItemCount = 0;
         int totalPayloadLengthBytes = 0;
-
         int index = 0;
 
-        foreach (string dosPath in dosPaths)
+        foreach (BlacklistPayloadEntry entry in entries)
         {
-            if (string.IsNullOrWhiteSpace(dosPath))
+            if (string.IsNullOrWhiteSpace(entry.DosPath))
             {
                 throw new ArgumentException(
-                    $"Blacklist DOS path collection contains a null/empty path at index {index}.",
-                    nameof(dosPaths));
+                    $"Blacklist entry collection contains a null/empty path at index {index}.",
+                    nameof(entries));
             }
 
-            // Reject embedded NUL in input. Payload will add exactly one trailing terminator.
-            if (dosPath.IndexOf('\0') >= 0)
+            if (entry.DosPath.IndexOf('\0') >= 0)
             {
                 throw new ArgumentException(
                     $"Blacklist DOS path contains embedded NUL at index {index}.",
-                    nameof(dosPaths));
+                    nameof(entries));
             }
 
-            // DOS -> NT, and this method returns lower-case already.
-            string ntPath = PathTranslator.DosPathToNtPath(dosPath);
+            // DOS -> NT, lowercase (PathTranslator handles both).
+            string ntPath = PathTranslator.DosPathToNtPath(entry.DosPath);
+
+            if (string.IsNullOrWhiteSpace(ntPath))
+            {
+                throw new InvalidOperationException(
+                    $"Blacklist DOS->NT translation failed at index {index}: '{entry.DosPath}'.");
+            }
 
             int pathUtf8ByteCount = Encoding.UTF8.GetByteCount(ntPath);
 
             if ((ulong)pathUtf8ByteCount + 1UL > uint.MaxValue)
             {
                 throw new ArgumentOutOfRangeException(
-                    nameof(dosPaths),
+                    nameof(entries),
                     $"Blacklist path is too long to encode with UInt32 length including NUL (index {index}).");
             }
 
             nativeNtPathsLowercase[index] = ntPath;
             pathUtf8ByteCounts[index] = pathUtf8ByteCount;
+            untrustedRights[index] = entry.AccessRightUntrusted;
+            trustedRights[index] = entry.AccessRightTrusted;
 
             checked
             {
+                totalPayloadLengthBytes += sizeof(uint); // access_right_untrusted
+                totalPayloadLengthBytes += sizeof(uint); // access_right_trusted
                 totalPayloadLengthBytes += sizeof(uint); // path_length_bytes
                 totalPayloadLengthBytes += pathUtf8ByteCount; // path bytes
                 totalPayloadLengthBytes += 1; // NUL
             }
 
-            writtenItemCount++;
             index++;
         }
 
@@ -164,9 +205,12 @@ public static class PayloadBuilders
             string ntPath = nativeNtPathsLowercase[pathIndex];
             int pathUtf8ByteCount = pathUtf8ByteCounts[pathIndex];
 
-            uint pathLengthBytesIncludingNullTerminator = checked((uint)pathUtf8ByteCount + 1u);
-
+            // [access_right_untrusted]
+            WriteUInt32LittleEndian(payload, ref offset, untrustedRights[pathIndex]);
+            // [access_right_trusted]
+            WriteUInt32LittleEndian(payload, ref offset, trustedRights[pathIndex]);
             // [path_length_bytes]
+            uint pathLengthBytesIncludingNullTerminator = checked((uint)pathUtf8ByteCount + 1u);
             WriteUInt32LittleEndian(payload, ref offset, pathLengthBytesIncludingNullTerminator);
             // [path_bytes (without terminator)]
             WriteUtf8StringBytesWithoutTerminator(payload, ref offset, ntPath, pathUtf8ByteCount);
@@ -174,19 +218,18 @@ public static class PayloadBuilders
             WriteByte(payload, ref offset, 0);
         }
 
-        return new PayloadBuildResult(payload, writtenItemCount);
+        return new PayloadBuildResult(payload, checked((uint)count));
     }
 
     /// <summary>
     /// Builds POLICY_SYNC payload bytes.
     ///
     /// Binary layout (little-endian), repeated item count times:
-    ///   [status: UInt8]                // messageContract.PolicySyncStatus
-    ///   [access_mask: UInt32]
-    ///   [path_length_bytes: UInt32]    // UTF-8 bytes INCLUDING NUL terminator
-    ///   [path_bytes: byte[path_length_bytes]]  // UTF-8 lower-case NT path INCLUDING trailing '\0'
-    ///
-    /// The returned itemCount equals the number of entries written.
+    ///   [status: UInt8]                          // PolicySyncStatus
+    ///   [access_right_untrusted: UInt32]
+    ///   [access_right_trusted: UInt32]
+    ///   [path_length_bytes: UInt32]              // UTF-8 bytes INCLUDING NUL terminator
+    ///   [path_bytes: byte[path_length_bytes]]    // UTF-8 lower-case NT path INCLUDING trailing '\0'
     /// </summary>
     public static PayloadBuildResult BuildPolicySyncPayload(IReadOnlyList<PolicySyncPayloadEntry> policyEntries)
     {
@@ -216,11 +259,12 @@ public static class PayloadBuilders
 
             checked
             {
-                totalPayloadLengthBytes += sizeof(byte); // status
-                totalPayloadLengthBytes += sizeof(uint); // access_mask
-                totalPayloadLengthBytes += sizeof(uint); // path_length_bytes
+                totalPayloadLengthBytes += sizeof(byte);     // status
+                totalPayloadLengthBytes += sizeof(uint);     // access_right_untrusted
+                totalPayloadLengthBytes += sizeof(uint);     // access_right_trusted
+                totalPayloadLengthBytes += sizeof(uint);     // path_length_bytes
                 totalPayloadLengthBytes += pathUtf8ByteCount; // path bytes
-                totalPayloadLengthBytes += 1; // NUL
+                totalPayloadLengthBytes += 1;                 // NUL
             }
         }
 
@@ -234,8 +278,10 @@ public static class PayloadBuilders
 
             // [status: UInt8]
             WriteByte(payload, ref offset, (byte)policyEntry.Status);
-            // [access_mask: UInt32]
-            WriteUInt32LittleEndian(payload, ref offset, policyEntry.AccessMask);
+            // [access_right_untrusted: UInt32]
+            WriteUInt32LittleEndian(payload, ref offset, policyEntry.AccessRightUntrusted);
+            // [access_right_trusted: UInt32]
+            WriteUInt32LittleEndian(payload, ref offset, policyEntry.AccessRightTrusted);
             // [path_length_bytes: UInt32]
             uint pathLengthBytesIncludingNullTerminator = checked((uint)pathUtf8ByteCount + 1u);
             WriteUInt32LittleEndian(payload, ref offset, pathLengthBytesIncludingNullTerminator);
@@ -252,15 +298,14 @@ public static class PayloadBuilders
     /// Builds CONNECTION_CONTEXT payload bytes.
     ///
     /// Binary layout (little-endian):
-    ///   [database_path_length: UInt16]         // UTF-8 bytes INCLUDING NUL terminator
-    ///   [database_path_bytes: byte[...]]       // UTF-8 lower-case NT path INCLUDING trailing '\0'
+    ///   [database_path_length: UInt16]           // UTF-8 bytes INCLUDING NUL terminator
+    ///   [database_path_bytes: byte[...]]         // UTF-8 lower-case NT path INCLUDING trailing '\0'
     ///   [path_count: UInt32]
     ///   repeated path_count times:
-    ///     [path_length: UInt16]                // UTF-8 bytes INCLUDING NUL terminator
-    ///     [path_bytes: byte[...]]              // UTF-8 lower-case NT path INCLUDING trailing '\0'
-    ///     [access_rights: UInt32]
-    ///
-    /// The returned itemCount equals path_count.
+    ///     [path_length: UInt16]                  // UTF-8 bytes INCLUDING NUL terminator
+    ///     [path_bytes: byte[...]]                // UTF-8 lower-case NT path INCLUDING trailing '\0'
+    ///     [access_right_untrusted: UInt32]
+    ///     [access_right_trusted: UInt32]
     /// </summary>
     public static PayloadBuildResult BuildConnectionContextPayload(
         string databaseNativeNtPathLowercase,
@@ -281,7 +326,6 @@ public static class PayloadBuilders
             throw new ArgumentNullException(nameof(pathAccessEntries));
         }
 
-        // [database_path_length: UInt16] + [database_path_bytes] + [NUL]
         int databasePathUtf8ByteCount = Encoding.UTF8.GetByteCount(databaseNativeNtPathLowercase);
 
         if ((uint)databasePathUtf8ByteCount + 1u > ushort.MaxValue)
@@ -295,10 +339,10 @@ public static class PayloadBuilders
 
         checked
         {
-            totalPayloadLengthBytes += sizeof(ushort); // database_path_length
+            totalPayloadLengthBytes += sizeof(ushort);            // database_path_length
             totalPayloadLengthBytes += databasePathUtf8ByteCount; // database_path_bytes
-            totalPayloadLengthBytes += 1; // NUL
-            totalPayloadLengthBytes += sizeof(uint); // path_count
+            totalPayloadLengthBytes += 1;                          // NUL
+            totalPayloadLengthBytes += sizeof(uint);              // path_count
         }
 
         for (int index = 0; index < count; index++)
@@ -330,10 +374,11 @@ public static class PayloadBuilders
 
             checked
             {
-                totalPayloadLengthBytes += sizeof(ushort); // path_length
+                totalPayloadLengthBytes += sizeof(ushort);    // path_length
                 totalPayloadLengthBytes += pathUtf8ByteCount; // path_bytes
-                totalPayloadLengthBytes += 1; // NUL
-                totalPayloadLengthBytes += sizeof(uint); // access_rights
+                totalPayloadLengthBytes += 1;                 // NUL
+                totalPayloadLengthBytes += sizeof(uint);      // access_right_untrusted
+                totalPayloadLengthBytes += sizeof(uint);      // access_right_trusted
             }
         }
 
@@ -351,7 +396,7 @@ public static class PayloadBuilders
         uint pathCount = checked((uint)count);
         WriteUInt32LittleEndian(payload, ref offset, pathCount);
 
-        // path entries in the database
+        // path entries
         for (int index = 0; index < count; index++)
         {
             ConnectionContextPathAccessEntry entry = pathAccessEntries[index];
@@ -364,8 +409,10 @@ public static class PayloadBuilders
             WriteUtf8StringBytesWithoutTerminator(payload, ref offset, entry.NativeNtPathLowercase, pathUtf8ByteCount);
             // [NUL terminator]
             WriteByte(payload, ref offset, 0);
-            // [access_rights: UInt32]
-            WriteUInt32LittleEndian(payload, ref offset, entry.AccessRights);
+            // [access_right_untrusted: UInt32]
+            WriteUInt32LittleEndian(payload, ref offset, entry.AccessRightUntrusted);
+            // [access_right_trusted: UInt32]
+            WriteUInt32LittleEndian(payload, ref offset, entry.AccessRightTrusted);
         }
 
         return new PayloadBuildResult(payload, itemCount: pathCount);

@@ -32,8 +32,9 @@ public sealed class PolicySyncService
         if (paths is null) throw new ArgumentNullException(nameof(paths));
         if (paths.Count == 0) return;
 
-        (MessageContract.PolicySyncStatus status, MessageContract.AccessPolicy access) =
-            MapOperation(operation);
+        (MessageContract.PolicySyncStatus status,
+         MessageContract.AccessPolicy untrusted,
+         MessageContract.AccessPolicy trusted) = MapOperation(operation);
 
         // Build & validate every entry up front; any per-path validation
         // failure aborts the whole call before any message is sent.
@@ -45,7 +46,7 @@ public sealed class PolicySyncService
                 throw new ArgumentException("Path collection contains a null/empty path.", nameof(paths));
             }
 
-            entries.Add(BuildPolicySyncPayloadEntry(status, access, path));
+            entries.Add(BuildPolicySyncPayloadEntry(status, untrusted, trusted, path));
         }
 
         var payloadBuildResult = PayloadBuilders.BuildPolicySyncPayload(entries);
@@ -59,23 +60,50 @@ public sealed class PolicySyncService
         _connectionService.SendMessageToKernelOrThrow(inputContainer);
 
         Logger.Information(
-            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Paths: {Count}",
+            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Paths: {Count}, UntrustedRights: 0x{Untrusted:X}, TrustedRights: 0x{Trusted:X}",
             operation,
-            paths.Count);
+            paths.Count,
+            (uint)untrusted,
+            (uint)trusted);
     }
 
-    private static (MessageContract.PolicySyncStatus status, MessageContract.AccessPolicy access) MapOperation(
-        ShieldOperationType operation) =>
+    /// <summary>
+    /// Maps a high-level Shield/Unshield to the wire-level (status, untrusted, trusted)
+    /// triple.
+    ///
+    /// Shield   : Lock-in-place softened matrix.
+    ///            untrusted = READ | WRITE | EXECUTE (AllButDestructive)
+    ///              Untrusted callers can read/write but cannot delete/rename/move,
+    ///              blocking ransomware-style mutation of path identity.
+    ///            trusted   = READ | WRITE | EXECUTE | DELETE | RENAME | MOVE (AllAccess)
+    ///              Trusted apps (Authenticode-verified, in the trusted-process
+    ///              ART) get destroy rights so atomic-save flows in Word/Excel
+    ///              still work.
+    /// Unshield : Status = Remove. Rights are ignored by the kernel on Remove
+    ///            (policy_remove just deletes the entry), so we send zero.
+    /// </summary>
+    private static (MessageContract.PolicySyncStatus status,
+                    MessageContract.AccessPolicy untrusted,
+                    MessageContract.AccessPolicy trusted) MapOperation(ShieldOperationType operation) =>
         operation switch
         {
-            ShieldOperationType.Shield   => (MessageContract.PolicySyncStatus.Add, MessageContract.AccessPolicy.AllButDelete),
-            ShieldOperationType.Unshield => (MessageContract.PolicySyncStatus.Remove, MessageContract.AccessPolicy.AllAccess),
+            ShieldOperationType.Shield   => (
+                MessageContract.PolicySyncStatus.Add,
+                MessageContract.AccessPolicy.AllButDestructive,
+                MessageContract.AccessPolicy.AllAccess),
+
+            ShieldOperationType.Unshield => (
+                MessageContract.PolicySyncStatus.Remove,
+                MessageContract.AccessPolicy.None,
+                MessageContract.AccessPolicy.None),
+
             _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported driver inform operation."),
         };
 
     private static PayloadBuilders.PolicySyncPayloadEntry BuildPolicySyncPayloadEntry(
         MessageContract.PolicySyncStatus policySyncStatus,
-        MessageContract.AccessPolicy allowedAccessPolicy,
+        MessageContract.AccessPolicy untrustedAccessPolicy,
+        MessageContract.AccessPolicy trustedAccessPolicy,
         string filePath)
     {
         if (filePath.IndexOf('\0') >= 0)
@@ -97,8 +125,12 @@ public sealed class PolicySyncService
 
         int pathUtf8ByteCount = Encoding.UTF8.GetByteCount(ntPathLowercase);
 
+        // Entry on the wire:
+        //   status(1) + access_right_untrusted(4) + access_right_trusted(4)
+        //   + path_length(4) + path bytes + NUL(1)
         int entryPayloadBytes = checked(
             sizeof(byte) +
+            sizeof(uint) +
             sizeof(uint) +
             sizeof(uint) +
             pathUtf8ByteCount +
@@ -112,7 +144,8 @@ public sealed class PolicySyncService
 
         return new PayloadBuilders.PolicySyncPayloadEntry(
             policySyncStatus,
-            (uint)allowedAccessPolicy,
+            (uint)untrustedAccessPolicy,
+            (uint)trustedAccessPolicy,
             ntPathLowercase);
     }
 }

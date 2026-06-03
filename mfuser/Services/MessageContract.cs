@@ -22,21 +22,27 @@ public static class MessageContract
     public const uint GuardMessageMagic = 0x44525547u;
     public const int MaxNtPathLength = 512; // MUST equal MAX_NT_PATH_LENGTH_CHARS
 
-
-    /// Defines access rights policies used for controlling file and directory access in the minifilter.
+    /// Defines access rights(UINT32 per side (untrusted + trusted)) policies
+    /// used for controlling file and directory access in the minifilter.
     [Flags]
     public enum AccessPolicy : uint
     {
-        None = 0,
-        Read = 1u << 0, // 0x00000001
-        Write = 1u << 1, // 0x00000002
-        Execute = 1u << 2, // 0x00000004
-        Rename = 1u << 4,
-        Move = 1u << 5,
-        Delete = 1u << 3, // 0x00000008
-        AllAccess = Read | Write | Execute | Delete, // 0x0000000F
-        AllButDelete = AllAccess & ~Delete, // 0x00000007
-        AllDeny = 0xFFFFFFFFu,
+        None    = 0,
+        Read    = 1u << 0, // 0x00000001 -- ACCESS_RIGHT_READ
+        Write   = 1u << 1, // 0x00000002 -- ACCESS_RIGHT_WRITE
+        Execute = 1u << 2, // 0x00000004 -- ACCESS_RIGHT_EXECUTE
+        Delete  = 1u << 3, // 0x00000008 -- ACCESS_RIGHT_DELETE
+        Rename  = 1u << 4, // 0x00000010 -- ACCESS_RIGHT_RENAME
+        Move    = 1u << 5, // 0x00000020 -- ACCESS_RIGHT_MOVE
+
+        // All rights the minifilter understands. Must match
+        // ACCESS_RIGHT_ALL on the kernel side (0x3F).
+        AllAccess = Read | Write | Execute | Delete | Rename | Move,
+
+        // Content-editable but no path-mutating destruction. Matches the
+        // kernel's ACCESS_RIGHT_ALL_BUT_DESTRUCTIVE (0x07). This is the
+        // untrusted half of "Lock-in-place" mode.
+        AllButDestructive = AllAccess & ~(Delete | Rename | Move),
     }
 
     // kernel: typedef UINT8 PAYLOAD_TYPE;
@@ -96,23 +102,27 @@ public static class MessageContract
 
       POLICY_SYNC payload_bytes layout:
         repeated header.item_count times:
-          [status: UINT8]
-          [access_mask: UINT32]
-          [path_length_bytes: UINT32]  // UTF-8 bytes, includes NUL terminator, lowercase NT path
-          [path_bytes: UCHAR[path_length_bytes]]
+          [status: UINT8]                       // PolicySyncStatus
+          [access_right_untrusted: UINT32]      // rights for untrusted callers
+          [access_right_trusted: UINT32]        // rights for trusted callers
+          [path_length_bytes: UINT32]           // UTF-8 bytes INCLUDING NUL
+          [path_bytes: UCHAR[path_length_bytes]]// lowercase NT path
 
-    Connection Context Layout:
-     [database_path_length: UINT16]   // UTF-8 bytes INCLUDING trailing '\0'
-     [database_path_bytes: UCHAR[database_path_length]]
-     [path_count: UINT32]                  // must equal header.item_count
-     repeated path_count times:
-       [path_length: UINT16]         // UTF-8 bytes INCLUDING trailing '\0'
-       [path_bytes: UCHAR[path_length]]
-       [access_rights: UINT32]
+      CONNECTION_CONTEXT payload_bytes layout:
+        [database_path_length: UINT16]          // UTF-8 bytes INCLUDING NUL
+        [database_path_bytes: UCHAR[database_path_length]]
+        [path_count: UINT32]                    // must equal header.item_count
+        repeated path_count times:
+          [path_length: UINT16]                 // UTF-8 bytes INCLUDING NUL
+          [path_bytes: UCHAR[path_length]]
+          [access_right_untrusted: UINT32]
+          [access_right_trusted: UINT32]
 
       BLACKLIST payload_bytes layout:
         repeated header.item_count times:
-          [path_length_bytes: UINT32]  // UTF-8 bytes including NUL terminator
+          [access_right_untrusted: UINT32]
+          [access_right_trusted: UINT32]
+          [path_length_bytes: UINT32]           // UTF-8 bytes INCLUDING NUL
           [path_bytes: UCHAR[path_length_bytes]]
     */
 

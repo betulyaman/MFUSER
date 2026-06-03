@@ -591,6 +591,16 @@ public sealed class ConnectionService : IDisposable
         List<PayloadBuilders.ConnectionContextPathAccessEntry> normalizedEntries =
             new(shieldedPathSet.Count);
 
+        // Every shielded entry uses Lock-in-place softened semantics for the
+        // initial sync:
+        //   untrusted callers get READ | WRITE | EXECUTE (AllButDestructive),
+        //   trusted callers get every right including DELETE/RENAME/MOVE
+        //   (AllAccess).
+        // When per-path modes (Lock-in-place / Read-only / Private) become a
+        // first-class UI concept, this is where the mapping changes.
+        const uint untrustedRights = (uint)MessageContract.AccessPolicy.AllButDestructive;
+        const uint trustedRights = (uint)MessageContract.AccessPolicy.AllAccess;
+
         foreach (string dosPath in shieldedPathSet)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -610,7 +620,8 @@ public sealed class ConnectionService : IDisposable
             normalizedEntries.Add(
                 new PayloadBuilders.ConnectionContextPathAccessEntry(
                     nativeNtPathLowercase,
-                    (uint)MessageContract.AccessPolicy.AllButDelete));
+                    untrustedRights,
+                    trustedRights));
         }
 
         PayloadBuilders.PayloadBuildResult payloadResult =

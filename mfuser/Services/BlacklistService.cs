@@ -178,10 +178,27 @@ public static class BlacklistService
 
         JsonReadService.ReadShieldedPaths(pathSet);
 
+        // The boot-time blacklist replay defaults every entry to Lock-in-place
+        // softened semantics, matching kernel-side BLACKLIST default
+        // (untrusted = ACCESS_RIGHT_ALL_BUT_DESTRUCTIVE, trusted = ACCESS_RIGHT_ALL).
+        // When per-path modes become a first-class concept in the on-disk
+        // policy, persist them in operations.json and feed them through here.
+        const uint untrustedRights = (uint)MessageContract.AccessPolicy.AllButDestructive;
+        const uint trustedRights = (uint)MessageContract.AccessPolicy.AllAccess;
+
+        var entries = new List<PayloadBuilders.BlacklistPayloadEntry>(pathSet.Count);
+        foreach (string dosPath in pathSet)
+        {
+            entries.Add(new PayloadBuilders.BlacklistPayloadEntry(
+                dosPath,
+                untrustedRights,
+                trustedRights));
+        }
+
         try
         {
             // 1) Build BLACKLIST payload
-            var payloadResult = PayloadBuilders.BlacklistPayloadBuilder(pathSet);
+            var payloadResult = PayloadBuilders.BlacklistPayloadBuilder(entries);
 
             // 2) Build encrypted+signed message
             byte[] finalMessageBytes = MessageBuilders.BuildMessage(
