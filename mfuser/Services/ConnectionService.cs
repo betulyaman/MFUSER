@@ -1,4 +1,5 @@
-﻿using Serilog;
+﻿using mfuser.Models;
+using Serilog;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
@@ -584,24 +585,18 @@ public sealed class ConnectionService : IDisposable
             throw new InvalidOperationException("Database NT path translation failed.");
         }
 
-        HashSet<string> shieldedPathSet = new(StringComparer.OrdinalIgnoreCase);
-
-        JsonReadService.ReadShieldedPaths(shieldedPathSet);
+        // Pull the (path, mode) pairs from operations.json so each entry
+        // ships with its actual configured bitmask pair rather than a
+        // global default. Mode → bitmask mapping lives in ShieldModeBitmask
+        // (single source of truth shared with PolicySyncService and
+        // PolicySnapshotService).
+        IReadOnlyList<(string Path, ShieldMode Mode)> shieldedEntries =
+            JsonReadService.ReadShieldedPathsWithModes();
 
         List<PayloadBuilders.ConnectionContextPathAccessEntry> normalizedEntries =
-            new(shieldedPathSet.Count);
+            new(shieldedEntries.Count);
 
-        // Every shielded entry uses Lock-in-place softened semantics for the
-        // initial sync:
-        //   untrusted callers get READ | WRITE | EXECUTE (AllButDestructive),
-        //   trusted callers get every right including DELETE/RENAME/MOVE
-        //   (AllAccess).
-        // When per-path modes (Lock-in-place / Read-only / Private) become a
-        // first-class UI concept, this is where the mapping changes.
-        const uint untrustedRights = (uint)MessageContract.AccessPolicy.AllButDestructive;
-        const uint trustedRights = (uint)MessageContract.AccessPolicy.AllAccess;
-
-        foreach (string dosPath in shieldedPathSet)
+        foreach ((string dosPath, ShieldMode mode) in shieldedEntries)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -617,11 +612,14 @@ public sealed class ConnectionService : IDisposable
                 throw new InvalidOperationException($"Failed to convert path '{dosPath}' to NT path.");
             }
 
+            (MessageContract.AccessPolicy untrusted, MessageContract.AccessPolicy trusted) =
+                ShieldModeBitmask.ToBitmasks(mode);
+
             normalizedEntries.Add(
                 new PayloadBuilders.ConnectionContextPathAccessEntry(
                     nativeNtPathLowercase,
-                    untrustedRights,
-                    trustedRights));
+                    (uint)untrusted,
+                    (uint)trusted));
         }
 
         PayloadBuilders.PayloadBuildResult payloadResult =

@@ -1,3 +1,4 @@
+using mfuser.Models;
 using Serilog;
 
 namespace mfuser.Services;
@@ -23,17 +24,24 @@ public interface IKernelComm
     void Stop();
 
     /// <summary>
-    /// Send a (path, operation) pair down to the kernel. Folder paths are
-    /// expanded to (folder + every file under it) and submitted as a single
-    /// batched policy-sync message (or as few messages as the wire size cap
-    /// allows).
+    /// Send a (path, operation, mode) tuple down to the kernel. Folder paths
+    /// are expanded to (folder + every file under it) and submitted as a
+    /// single batched policy-sync message (or as few messages as the wire
+    /// size cap allows). All expanded paths share the same mode.
+    ///
+    /// <paramref name="mode"/> is irrelevant for an Unshield (kernel ignores
+    /// rights on Remove); callers may pass <see cref="ShieldMode.LockInPlace"/>
+    /// as a default in that case.
     /// </summary>
     /// <returns>
     /// <c>success</c>: true iff every path was acknowledged by the driver.
     /// <c>pathsSucceeded</c>/<c>pathsFailed</c>: how many paths got through vs
     /// failed. For a single-path submit they're 1/0 or 0/1.
     /// </returns>
-    (bool success, int pathsSucceeded, int pathsFailed) SendOperation(string path, string operation);
+    (bool success, int pathsSucceeded, int pathsFailed) SendOperation(
+        string path,
+        string operation,
+        ShieldMode mode);
 
     /// <summary>
     /// Add or remove a trusted-process image path. The kernel grants the
@@ -145,7 +153,10 @@ public sealed class KernelComm : IKernelComm
         LogReceived?.Invoke(this, "Kernel channel closed.");
     }
 
-    public (bool success, int pathsSucceeded, int pathsFailed) SendOperation(string path, string operation)
+    public (bool success, int pathsSucceeded, int pathsFailed) SendOperation(
+        string path,
+        string operation,
+        ShieldMode mode)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -185,12 +196,12 @@ public sealed class KernelComm : IKernelComm
         // batch (all `paths.Length` paths) failed.
         try
         {
-            policy.InformDriver(paths, shieldOperationType);
+            policy.InformDriver(paths, shieldOperationType, mode);
             return (true, paths.Length, 0);
         }
         catch (Exception ex)
         {
-            Logger.Error(ex, "MINIFILTER: InformDriver failed. Path: {Path}, Op: {Operation}", path, operation);
+            Logger.Error(ex, "MINIFILTER: InformDriver failed. Path: {Path}, Op: {Operation}, Mode: {Mode}", path, operation, mode);
             return (false, 0, paths.Length);
         }
     }

@@ -183,45 +183,59 @@ public static class PolicySnapshotService
             throw new ArgumentException("Policy snapshot file path is null or empty.", nameof(snapshotFilePath));
         }
 
-        HashSet<string> pathSet = new(StringComparer.OrdinalIgnoreCase)
+        // Internal product files always default to Lock-in-place — they
+        // protect themselves at the kernel boot path. Per-user shielded
+        // paths inherit whatever mode the user picked in the UI.
+        const ShieldMode internalFileMode = ShieldMode.LockInPlace;
+
+        var ordered = new List<(string Path, ShieldMode Mode)>
         {
             // policy_snapshot.bin protects itself: the kernel reads this file
             // at boot, so it must remain readable and tamper-proof.
-            snapshotFilePath,
+            (snapshotFilePath, internalFileMode),
 
             // operations.json is the authoritative shielded-path database.
             // The CONNECTION_CONTEXT payload tells the kernel about it once
             // the agent connects, but baking it into the snapshot keeps it
             // protected during the boot window before the agent initializes.
-            OperationStore.FilePath,
+            (OperationStore.FilePath, internalFileMode),
 
             // trusted_processes.json is reloaded by the agent at startup and
             // replayed to the kernel; treat it with the same care.
-            TrustedProcessStore.FilePath,
+            (TrustedProcessStore.FilePath, internalFileMode),
 
             // The encrypted kernel boot snapshot of the trusted-process list.
             // Read by the minifilter on first-volume attach, so it must
             // remain readable AND tamper-proof.
-            TrustedProcessSnapshotService.FilePath,
+            (TrustedProcessSnapshotService.FilePath, internalFileMode),
         };
 
-        JsonReadService.ReadShieldedPaths(pathSet);
+        var seen = new HashSet<string>(
+            ordered.Select(e => e.Path),
+            StringComparer.OrdinalIgnoreCase);
 
-        // The boot-time snapshot defaults every entry to Lock-in-place
-        // softened semantics, matching the kernel-side default
-        // (untrusted = ACCESS_RIGHT_ALL_BUT_DESTRUCTIVE, trusted = ACCESS_RIGHT_ALL).
-        // When per-path modes become a first-class concept in the on-disk
-        // policy, persist them in operations.json and feed them through here.
-        const uint untrustedRights = (uint)MessageContract.AccessPolicy.AllButDestructive;
-        const uint trustedRights = (uint)MessageContract.AccessPolicy.AllAccess;
-
-        var entries = new List<PayloadBuilders.PolicySnapshotPayloadEntry>(pathSet.Count);
-        foreach (string dosPath in pathSet)
+        // Per-user shielded paths come with whatever mode was selected in
+        // the UI. Duplicate paths (e.g. a user-shielded operations.json)
+        // collapse to the first occurrence, which is the internal default
+        // — that's the safer choice.
+        foreach ((string path, ShieldMode mode) in JsonReadService.ReadShieldedPathsWithModes())
         {
+            if (seen.Add(path))
+            {
+                ordered.Add((path, mode));
+            }
+        }
+
+        var entries = new List<PayloadBuilders.PolicySnapshotPayloadEntry>(ordered.Count);
+        foreach ((string dosPath, ShieldMode mode) in ordered)
+        {
+            (MessageContract.AccessPolicy untrusted, MessageContract.AccessPolicy trusted) =
+                ShieldModeBitmask.ToBitmasks(mode);
+
             entries.Add(new PayloadBuilders.PolicySnapshotPayloadEntry(
                 dosPath,
-                untrustedRights,
-                trustedRights));
+                (uint)untrusted,
+                (uint)trusted));
         }
 
         try

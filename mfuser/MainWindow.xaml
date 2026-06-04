@@ -136,11 +136,13 @@
                             <GridView>
                                 <GridViewColumn Header="#" Width="40"
                                     DisplayMemberBinding="{Binding Index}"/>
-                                <GridViewColumn Header="Path" Width="280"
+                                <GridViewColumn Header="Path" Width="240"
                                     DisplayMemberBinding="{Binding Path}"/>
-                                <GridViewColumn Header="Operation" Width="90"
+                                <GridViewColumn Header="Mode" Width="110"
+                                    DisplayMemberBinding="{Binding Mode}"/>
+                                <GridViewColumn Header="Operation" Width="80"
                                     DisplayMemberBinding="{Binding Operation}"/>
-                                <GridViewColumn Header="Status" Width="90"
+                                <GridViewColumn Header="Status" Width="80"
                                     DisplayMemberBinding="{Binding Status}"/>
                             </GridView>
                         </ListView.View>
@@ -162,15 +164,19 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
 
                     <!-- Selection always shields. To unshield, double-click
                          the path in a log line on the right pane. -->
-                    <TextBlock Grid.Row="0" Grid.ColumnSpan="4" Text="Shield a file or folder"
+                    <TextBlock Grid.Row="0" Grid.ColumnSpan="5" Text="Shield a file or folder"
                                Style="{StaticResource HeaderStyle}"/>
 
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="Path"
                                Style="{StaticResource LabelStyle}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="4" Text="Mode"
+                               Style="{StaticResource LabelStyle}"
+                               Margin="6,0,0,4"/>
 
                     <TextBox Grid.Row="2" Grid.Column="0" x:Name="PathTextBox"
                              KeyDown="PathTextBox_KeyDown"/>
@@ -187,6 +193,14 @@
                     <Button Grid.Row="2" Grid.Column="3" x:Name="SubmitButton"
                             Content="Shield" Margin="6,0,0,0"
                             Click="SubmitButton_Click"/>
+                    <ComboBox Grid.Row="2" Grid.Column="4" x:Name="ModeComboBox"
+                              Margin="6,0,0,0" MinWidth="130"
+                              SelectedIndex="0"
+                              ToolTip="Lock-in-place: trusted apps can save, untrusted cannot delete/rename. Read-only: nobody can write. Private: only the agent can touch the file.">
+                        <ComboBoxItem Content="Lock-in-place"/>
+                        <ComboBoxItem Content="Read-only"/>
+                        <ComboBoxItem Content="Private"/>
+                    </ComboBox>
                 </Grid>
             </Border>
         </Grid>

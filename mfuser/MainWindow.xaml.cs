@@ -172,9 +172,9 @@ public partial class MainWindow : Window
     // =================================================================
     // When the user clicks Submit (or presses Enter in the path box):
     //  - validate the path,
-    //  - read the selected operation,
+    //  - read the selected mode from the ComboBox,
     //  - create an OperationEntry row with status "Sending...",
-    //  - call _kernel.SendOperation(path, op),
+    //  - call _kernel.SendOperation(path, "shield", mode),
     //  - update the row's status based on the result.
     private void SubmitButton_Click(object sender, RoutedEventArgs e) => SubmitCurrentInput();
 
@@ -198,14 +198,16 @@ public partial class MainWindow : Window
         }
 
         // Selection always shields. Unshield is done by double-clicking the
-        // path in a log line.
+        // row in the Operations list.
         const string operation = "shield";
+        ShieldMode mode = ReadSelectedShieldMode();
 
         var entry = new OperationEntry
         {
             Index = Operations.Count + 1,
             Path = path,
             Operation = operation,
+            Mode = mode,
             Status = "Sending...",
         };
         Operations.Add(entry);
@@ -214,6 +216,22 @@ public partial class MainWindow : Window
 
         PathTextBox.Clear();
         PathTextBox.Focus();
+    }
+
+    /// <summary>
+    /// Translates the ComboBox's selected index into a <see cref="ShieldMode"/>.
+    /// Order in MainWindow.xaml: Lock-in-place (0), Read-only (1), Private (2).
+    /// Falls back to <see cref="ShieldMode.LockInPlace"/> if the selection is
+    /// out of range (defensive; should not happen with the static ComboBox).
+    /// </summary>
+    private ShieldMode ReadSelectedShieldMode()
+    {
+        return ModeComboBox?.SelectedIndex switch
+        {
+            1 => ShieldMode.ReadOnly,
+            2 => ShieldMode.Private,
+            _ => ShieldMode.LockInPlace,
+        };
     }
 
     // =================================================================
@@ -272,9 +290,10 @@ public partial class MainWindow : Window
     /// </summary>
     private void RunOperationOnEntry(OperationEntry entry, string operation, string source)
     {
-        // Capture the path locally so the background work is independent of
-        // any later mutations to the entry.
+        // Capture the path and mode locally so the background work is
+        // independent of any later mutations to the entry.
         string path = entry.Path;
+        ShieldMode mode = entry.Mode;
 
         // Reset auto-prompt dedupe for this path: any subsequent unauthorized
         // op for files under it should re-prompt (the user just changed their
@@ -285,7 +304,7 @@ public partial class MainWindow : Window
         {
             try
             {
-                (bool ok, int pathsSucceeded, int pathsFailed) = _kernel.SendOperation(path, operation);
+                (bool ok, int pathsSucceeded, int pathsFailed) = _kernel.SendOperation(path, operation, mode);
 
                 Dispatcher.Invoke(() =>
                 {

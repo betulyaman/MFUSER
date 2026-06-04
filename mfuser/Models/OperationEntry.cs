@@ -16,6 +16,7 @@ public sealed class OperationEntry : INotifyPropertyChanged
     private string _path = string.Empty;
     private string _operation = string.Empty;
     private string _status = string.Empty;
+    private ShieldMode _mode = ShieldMode.LockInPlace;
 
     public int Index
     {
@@ -39,6 +40,15 @@ public sealed class OperationEntry : INotifyPropertyChanged
     {
         get => _status;
         set => SetField(ref _status, value ?? string.Empty);
+    }
+
+    /// Selected protection mode. Persisted to operations.json so the
+    /// same mode survives across app restarts and reboots (via the
+    /// kernel boot snapshot).
+    public ShieldMode Mode
+    {
+        get => _mode;
+        set => SetField(ref _mode, value);
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

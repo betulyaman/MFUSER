@@ -19,10 +19,27 @@ public static class JsonReadService
     {
         ArgumentNullException.ThrowIfNull(shieldedPaths);
 
-        foreach (var path in GetCurrentlyShieldedPaths())
+        foreach ((string path, _) in GetCurrentlyShieldedPathsWithModes())
         {
             TryAddExistingPath(shieldedPaths, path);
         }
+    }
+
+    /// <summary>
+    /// Same as <see cref="ReadShieldedPaths"/> but also yields the
+    /// per-path <see cref="ShieldMode"/> for every existing/expanded entry.
+    /// Folder expansions inherit the folder's mode.
+    /// </summary>
+    public static IReadOnlyList<(string Path, ShieldMode Mode)> ReadShieldedPathsWithModes()
+    {
+        var result = new List<(string Path, ShieldMode Mode)>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach ((string path, ShieldMode mode) in GetCurrentlyShieldedPathsWithModes())
+        {
+            TryAddExistingPathWithMode(result, seen, path, mode);
+        }
+        return result;
     }
 
     /// <summary>
@@ -47,7 +64,7 @@ public static class JsonReadService
         string? bestMatch = null;
         int bestLength = -1;
 
-        foreach (string shieldedPath in GetCurrentlyShieldedPaths())
+        foreach ((string shieldedPath, _) in GetCurrentlyShieldedPathsWithModes())
         {
             string shieldedNormalized = TrimTrailingSeparator(shieldedPath);
             if (shieldedNormalized.Length == 0) continue;
@@ -90,8 +107,9 @@ public static class JsonReadService
         c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar;
 
     // Reduce the entries in the JSON file to one path per Path (last-wins),
-    // then yield only the paths that are currently shielded.
-    private static IEnumerable<string> GetCurrentlyShieldedPaths()
+    // then yield only the paths that are currently shielded, each paired
+    // with the mode chosen on that last shield.
+    private static IEnumerable<(string Path, ShieldMode Mode)> GetCurrentlyShieldedPathsWithModes()
     {
         var latestPerPath = new Dictionary<string, OperationEntry>(
             StringComparer.OrdinalIgnoreCase);
@@ -106,7 +124,7 @@ public static class JsonReadService
 
         return latestPerPath
             .Where(kv => IsCurrentlyShielded(kv.Value))
-            .Select(kv => kv.Key);
+            .Select(kv => (kv.Key, kv.Value.Mode));
     }
 
     private static bool IsCurrentlyShielded(OperationEntry entry) =>
@@ -137,6 +155,60 @@ public static class JsonReadService
                     "MINIFILTER: Expanded shielded folder {Folder} to {Count} path(s) (folder + files).",
                     fullPath,
                     added);
+                return;
+            }
+
+            Logger.Information(
+                "MINIFILTER: Skipping non-existent shielded path: {FullPath}",
+                fullPath);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warning(
+                ex,
+                "MINIFILTER: Skipping inaccessible shielded path: {FullPath}",
+                fullPath);
+        }
+    }
+
+    // Mirror of TryAddExistingPath that also tags every emitted entry with
+    // the mode taken from the JSON row. Folder expansions inherit the
+    // folder's mode — every file inside a Lock-in-place folder is itself
+    // Lock-in-place, every file inside a Read-only folder is Read-only, and
+    // so on.
+    private static void TryAddExistingPathWithMode(
+        List<(string Path, ShieldMode Mode)> result,
+        ISet<string> seen,
+        string fullPath,
+        ShieldMode mode)
+    {
+        try
+        {
+            if (File.Exists(fullPath))
+            {
+                if (seen.Add(fullPath))
+                {
+                    result.Add((fullPath, mode));
+                }
+                return;
+            }
+
+            if (Directory.Exists(fullPath))
+            {
+                int added = 0;
+                foreach (string expandedPath in PathExpander.ExpandToShieldPaths(fullPath))
+                {
+                    if (seen.Add(expandedPath))
+                    {
+                        result.Add((expandedPath, mode));
+                        added++;
+                    }
+                }
+                Logger.Debug(
+                    "MINIFILTER: Expanded shielded folder {Folder} to {Count} path(s) at mode {Mode}.",
+                    fullPath,
+                    added,
+                    mode);
                 return;
             }
 

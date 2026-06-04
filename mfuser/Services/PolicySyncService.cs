@@ -1,3 +1,4 @@
+using mfuser.Models;
 using Serilog;
 using System.Text;
 
@@ -24,17 +25,24 @@ public sealed class PolicySyncService
 
     /// <summary>
     /// Sends one or more paths to the minifilter as a single encrypted+signed
-    /// policy-sync message. All paths share the same <paramref name="operation"/>.
-    /// For a single-path submit, just pass a one-element list.
+    /// policy-sync message. All paths share the same <paramref name="operation"/>
+    /// and <paramref name="mode"/>.
+    ///
+    /// For a single-path submit, just pass a one-element list. The mode is
+    /// irrelevant for Unshield (kernel ignores rights on Remove) but the
+    /// caller still has to pass one; LockInPlace is a fine default.
     /// </summary>
-    public void InformDriver(IReadOnlyList<string> paths, ShieldOperationType operation)
+    public void InformDriver(
+        IReadOnlyList<string> paths,
+        ShieldOperationType operation,
+        ShieldMode mode)
     {
         if (paths is null) throw new ArgumentNullException(nameof(paths));
         if (paths.Count == 0) return;
 
         (MessageContract.PolicySyncStatus status,
          MessageContract.AccessPolicy untrusted,
-         MessageContract.AccessPolicy trusted) = MapOperation(operation);
+         MessageContract.AccessPolicy trusted) = MapOperation(operation, mode);
 
         // Build & validate every entry up front; any per-path validation
         // failure aborts the whole call before any message is sent.
@@ -60,45 +68,50 @@ public sealed class PolicySyncService
         _connectionService.SendMessageToKernelOrThrow(inputContainer);
 
         Logger.Information(
-            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Paths: {Count}, UntrustedRights: 0x{Untrusted:X}, TrustedRights: 0x{Trusted:X}",
+            "MINIFILTER: Policy sync sent to kernel. Operation: {Operation}, Mode: {Mode}, Paths: {Count}, UntrustedRights: 0x{Untrusted:X}, TrustedRights: 0x{Trusted:X}",
             operation,
+            mode,
             paths.Count,
             (uint)untrusted,
             (uint)trusted);
     }
 
     /// <summary>
-    /// Maps a high-level Shield/Unshield to the wire-level (status, untrusted, trusted)
-    /// triple.
+    /// Maps a high-level (operation, mode) to the wire-level
+    /// (status, untrusted, trusted) triple.
     ///
-    /// Shield   : Lock-in-place softened matrix.
-    ///            untrusted = READ | WRITE | EXECUTE (AllButDestructive)
-    ///              Untrusted callers can read/write but cannot delete/rename/move,
-    ///              blocking ransomware-style mutation of path identity.
-    ///            trusted   = READ | WRITE | EXECUTE | DELETE | RENAME | MOVE (AllAccess)
-    ///              Trusted apps (Authenticode-verified, in the trusted-process
-    ///              ART) get destroy rights so atomic-save flows in Word/Excel
-    ///              still work.
-    /// Unshield : Status = Remove. Rights are ignored by the kernel on Remove
-    ///            (policy_remove just deletes the entry), so we send zero.
+    /// Shield: status = Add; bitmasks come from <see cref="ShieldModeBitmask"/>
+    ///   based on the selected mode.
+    /// Unshield: status = Remove; the kernel ignores rights on Remove
+    ///   (policy_remove just deletes the entry), so we send (None, None).
+    ///   The mode argument is ignored on Unshield.
     /// </summary>
     private static (MessageContract.PolicySyncStatus status,
                     MessageContract.AccessPolicy untrusted,
-                    MessageContract.AccessPolicy trusted) MapOperation(ShieldOperationType operation) =>
-        operation switch
+                    MessageContract.AccessPolicy trusted) MapOperation(
+        ShieldOperationType operation,
+        ShieldMode mode)
+    {
+        switch (operation)
         {
-            ShieldOperationType.Shield   => (
-                MessageContract.PolicySyncStatus.Add,
-                MessageContract.AccessPolicy.AllButDestructive,
-                MessageContract.AccessPolicy.AllAccess),
+            case ShieldOperationType.Shield:
+            {
+                (MessageContract.AccessPolicy untrusted, MessageContract.AccessPolicy trusted) =
+                    ShieldModeBitmask.ToBitmasks(mode);
+                return (MessageContract.PolicySyncStatus.Add, untrusted, trusted);
+            }
 
-            ShieldOperationType.Unshield => (
-                MessageContract.PolicySyncStatus.Remove,
-                MessageContract.AccessPolicy.None,
-                MessageContract.AccessPolicy.None),
+            case ShieldOperationType.Unshield:
+                return (
+                    MessageContract.PolicySyncStatus.Remove,
+                    MessageContract.AccessPolicy.None,
+                    MessageContract.AccessPolicy.None);
 
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unsupported driver inform operation."),
-        };
+            default:
+                throw new ArgumentOutOfRangeException(
+                    nameof(operation), operation, "Unsupported driver inform operation.");
+        }
+    }
 
     private static PayloadBuilders.PolicySyncPayloadEntry BuildPolicySyncPayloadEntry(
         MessageContract.PolicySyncStatus policySyncStatus,
