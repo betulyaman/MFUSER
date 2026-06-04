@@ -27,22 +27,23 @@ public static class MessageContract
     [Flags]
     public enum AccessPolicy : uint
     {
-        None    = 0,
-        Read    = 1u << 0, // 0x00000001 -- ACCESS_RIGHT_READ
-        Write   = 1u << 1, // 0x00000002 -- ACCESS_RIGHT_WRITE
-        Execute = 1u << 2, // 0x00000004 -- ACCESS_RIGHT_EXECUTE
-        Delete  = 1u << 3, // 0x00000008 -- ACCESS_RIGHT_DELETE
-        Rename  = 1u << 4, // 0x00000010 -- ACCESS_RIGHT_RENAME
-        Move    = 1u << 5, // 0x00000020 -- ACCESS_RIGHT_MOVE
+        None     = 0,
+        Read     = 1u << 0, // 0x00000001 -- ACCESS_RIGHT_READ
+        Write    = 1u << 1, // 0x00000002 -- ACCESS_RIGHT_WRITE
+        Execute  = 1u << 2, // 0x00000004 -- ACCESS_RIGHT_EXECUTE
+        Delete   = 1u << 3, // 0x00000008 -- ACCESS_RIGHT_DELETE
+        Rename   = 1u << 4, // 0x00000010 -- ACCESS_RIGHT_RENAME
+        Move     = 1u << 5, // 0x00000020 -- ACCESS_RIGHT_MOVE
+        Hardlink = 1u << 6, // 0x00000040 -- ACCESS_RIGHT_HARDLINK
 
         // All rights the minifilter understands. Must match
         // ACCESS_RIGHT_ALL on the kernel side (0x3F).
-        AllAccess = Read | Write | Execute | Delete | Rename | Move,
+        AllAccess = Read | Write | Execute | Delete | Rename | Move | Hardlink,
 
         // Content-editable but no path-mutating destruction. Matches the
         // kernel's ACCESS_RIGHT_ALL_BUT_DESTRUCTIVE (0x07). This is the
         // untrusted half of "Lock-in-place" mode.
-        AllButDestructive = AllAccess & ~(Delete | Rename | Move),
+        AllButDestructive = AllAccess & ~(Delete | Rename | Move | Hardlink),
     }
 
     // kernel: typedef UINT8 PAYLOAD_TYPE;
@@ -96,6 +97,7 @@ public static class MessageContract
         Read,
         Rename,
         Write,
+        Hardlink,
     };
 
 
