@@ -117,6 +117,7 @@ public sealed class ConnectionService : IDisposable
                         throw new InvalidOperationException(
                             $"Failed to send message to kernel. HRESULT=0x{hResult:X8}");
                     }
+                    Interlocked.Increment(ref MessageContract.SentMessageSequenceNumber);
                 }
             }
         }
@@ -434,6 +435,13 @@ public sealed class ConnectionService : IDisposable
             }
 
             string communicationPortName = GetPortName(portKind);
+
+            if (portKind == PortKind.SendToKernel)
+            {
+                Interlocked.Exchange(ref MessageContract.SentMessageSequenceNumber, 0u);
+                Interlocked.Exchange(ref MessageContract.ReceivedMessageSequenceNumber, 0u);
+            }
+
             ReadOnlyMemory<byte> connectionContextBuffer = CreateConnectionContextForPort(portKind, cancellationToken);
 
             var (result, newHandle) = ConnectCommunicationPort_NoLock(
@@ -441,6 +449,11 @@ public sealed class ConnectionService : IDisposable
                 connectionContextBuffer);
 
             ReplacePortHandle_NoLock(portKind, newHandle);
+
+            if (portKind == PortKind.SendToKernel && result == MinifilterConnectionResult.ConnectedAndAuthenticated)
+            {
+                Interlocked.Increment(ref MessageContract.SentMessageSequenceNumber);
+            }
 
             return result;
         }

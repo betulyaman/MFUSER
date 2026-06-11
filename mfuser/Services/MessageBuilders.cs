@@ -58,11 +58,12 @@ public static class MessageBuilders
     {
         int messageHeaderSizeBytes = Marshal.SizeOf<MessageContract.PlaintextMessageHeader>();
 
-        // Pack=1 expectation: 16 bytes.
-        if (messageHeaderSizeBytes != 16)
+        // Pack=1 expectation: 20 bytes (Type[1] + Magic[4] + SequenceNumber[4]
+        // + HeaderSize[2] + PayloadType[1] + PayloadLengthBytes[4] + ItemCount[4]).
+        if (messageHeaderSizeBytes != 20)
         {
             throw new InvalidOperationException(
-                $"MESSAGE_HEADER size mismatch. Expected 16, got {messageHeaderSizeBytes}. Check Pack=1.");
+                $"MESSAGE_HEADER size mismatch. Expected 20, got {messageHeaderSizeBytes}. Check Pack=1.");
         }
 
         byte[] buffer = new byte[checked(messageHeaderSizeBytes + payloadBytes.Length)];
@@ -75,6 +76,10 @@ public static class MessageBuilders
 
         // Magic
         BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset, sizeof(uint)), MessageContract.GuardMessageMagic);
+        offset += sizeof(uint);
+
+        // Sequence Number
+        BinaryPrimitives.WriteUInt32LittleEndian(buffer.AsSpan(offset, sizeof(uint)), MessageContract.SentMessageSequenceNumber);
         offset += sizeof(uint);
 
         // HeaderSize

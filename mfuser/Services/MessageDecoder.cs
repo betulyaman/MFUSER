@@ -377,6 +377,11 @@ public static class MessageDecoder
             return false;
         }
 
+        if (plaintextMessageHeader.SequenceNumber != MessageContract.ReceivedMessageSequenceNumber)
+        {
+            return false;
+        }
+
         if (plaintextMessageHeader.HeaderSize != PlaintextMessageHeaderSize)
         {
             return false;
@@ -468,11 +473,18 @@ public static class MessageDecoder
 
         ReadOnlySpan<byte> payloadBytes = plaintextContainerBytes.Slice(PlaintextMessageHeaderSize, payloadLength);
 
-        return PayloadParser.ParsePayload(
+        bool decoded = PayloadParser.ParsePayload(
             in plaintextMessageHeader,
             payloadBytes,
             out unauthorizedOperations,
             out logEntries);
+
+        if (decoded)
+        {
+            Interlocked.Increment(ref MessageContract.ReceivedMessageSequenceNumber);
+        }
+
+        return decoded;
     }
 
     private static bool ParseSignedContainerToPlaintext(

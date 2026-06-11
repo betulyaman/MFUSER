@@ -21,6 +21,9 @@ public static class MessageContract
     public const uint MaxItemCountInMessage = 512;
     public const uint GuardMessageMagic = 0x44525547u;
     public const int MaxNtPathLength = 512; // MUST equal MAX_NT_PATH_LENGTH_CHARS
+    
+    public static uint SentMessageSequenceNumber = 0;
+    public static uint ReceivedMessageSequenceNumber = 0;
 
     /// Defines access rights(UINT32 per side (untrusted + trusted)) policies
     /// used for controlling file and directory access in the minifilter.
@@ -98,6 +101,9 @@ public static class MessageContract
         Rename,
         Write,
         Hardlink,
+        SetZero,
+        SetReparsePoint,
+        DuplicateExtentsToFile,
     };
 
 
@@ -214,6 +220,7 @@ public static class MessageContract
         public MessageType Type;
 
         public uint Magic;
+        public uint SequenceNumber;
         public ushort HeaderSize;
 
         public PayloadType PayloadType;
